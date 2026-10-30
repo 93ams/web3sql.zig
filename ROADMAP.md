@@ -53,7 +53,7 @@ Dependencies: `M0 → M1 → {M2, M3, M4, M5} → M6 → M7 → M8`. Items insid
 - [x] M0.5 `build.zig`: unknown chain/protocol → hard error (`b.fatal`); compute `any_chain` / `any_protocol` once and export in `build_options`; helper to define the 3 target modules without repetition.
 - [x] M0.6 `scripts/req_coverage.sh`: lists PRD `REQ-*` ids with no matching test name.
 - [x] M0.7 CI (`.github/workflows/ci.yml`): Linux/macOS/Windows `zig build test`, flag matrix (`all`, `none`, each single chain), `zig fmt --check`.
-- [ ] M0.8 `git init`, tag `v0.0.1`, add `README.md` (build flags, targets, function catalogue generated from M7).
+- [x] M0.8 `git init`, tag `v0.0.1`, add `README.md` (build flags, targets, function catalogue generated from M7).
 
 **Acceptance:** A1–A4, A13 closed; CI matrix green.
 
@@ -71,61 +71,69 @@ Dependencies: `M0 → M1 → {M2, M3, M4, M5} → M6 → M7 → M8`. Items insid
 **Acceptance:** all REQ-CORE ids covered; bench meets §6 targets or the gap is written down in `docs/PERF.md`.
 
 ### M2: EVM (REQ-EVM-01..03): lane A
-- [ ] M2.1 Address: EIP-55 validate (not only format), parse, `CREATE`/`CREATE2` (from M0.1).
-- [ ] M2.2 **Type grammar & signature parser:** `uintN/intN/address/bool/bytesN/bytes/string/T[]/T[N]/(tuple)`, `indexed`, named params, human-readable (`event Swap(...)`, `function ...`) → comptime-free runtime `Type` tree stored in a caller arena at bind time. Canonical signature rendering → `topic0`/selector.
-- [ ] M2.3 **JSON ABI fragments:** `std.json` parse of event/function fragments → same `Type` tree. Reject unknown types with errors, not panics.
-- [ ] M2.4 **Head/tail decoder:** static and dynamic types, nested tuples/arrays, offset/length bounds checks, cycle/overlap-safe (offset must stay within data; total work capped by `data.len`). Output as a flat "value cursor" API (no allocation) plus `decodeField(path)` for SQL extraction of one field.
-- [ ] M2.5 **Log decoding:** `topics[1..]` for indexed params, `data` for the rest; dynamic indexed params surface as their hash.
-- [ ] M2.6 Calldata decoding: selector match + args.
+- [x] M2.1 Address: EIP-55 validate (not only format), parse, `CREATE`/`CREATE2` (from M0.1).
+- [x] M2.2 **Type grammar & signature parser:** `uintN/intN/address/bool/bytesN/bytes/string/T[]/T[N]/(tuple)`, `indexed`, named params, human-readable (`event Swap(...)`, `function ...`) → comptime-free runtime `Type` tree stored in a caller arena at bind time. Canonical signature rendering → `topic0`/selector.
+- [x] M2.3 **JSON ABI fragments:** `std.json` parse of event/function fragments → same `Type` tree. Reject unknown types with errors, not panics.
+- [x] M2.4 **Head/tail decoder:** static and dynamic types, nested tuples/arrays, offset/length bounds checks, cycle/overlap-safe (offset must stay within data; total work capped by `data.len`). Output as a flat "value cursor" API (no allocation) plus `decodeField(path)` for SQL extraction of one field.
+- [x] M2.5 **Log decoding:** `topics[1..]` for indexed params, `data` for the rest; dynamic indexed params surface as their hash.
+- [x] M2.6 Calldata decoding: selector match + args.
 - [ ] M2.7 Fuzz: ABI decoder, signature parser. Known-answer: Uniswap v3 `Swap`, ERC-20 `Transfer`, Seaport `OrderFulfilled`.
 
 **Acceptance:** ≥ 500k decoded Swap logs/s/core on bench; fuzz 10M iterations clean.
 
 ### M3: SVM (REQ-SVM-01..02): lane B
-- [ ] M3.1 Pubkey: Base58 parse/format (uses M1.3), `isOnCurve` (M1.8), `findProgramAddress`/`createProgramAddress` with bump search 255→0 and seed limits (≤16 seeds, ≤32 B each).
-- [ ] M3.2 Borsh: complete reader (all ints, f32/f64, bool, string, fixed array, `Vec<T>`, `Option<T>`, enums, structs) driven by a runtime schema; guard `Vec` length against remaining bytes before iterating.
-- [ ] M3.3 Anchor: discriminators (M0.2), event CPI log parsing (`Program data: <base64>`), IDL JSON → schema (types, accounts, events, instructions).
-- [ ] M3.4 Fuzz Borsh/IDL decode. Vectors from Anchor's own test suite; Raydium/Orca swap instruction samples from `test_data/svm_instructions.parquet`.
+- [x] M3.1 Pubkey: Base58 parse/format (uses M1.3), `isOnCurve` (M1.8), `findProgramAddress`/`createProgramAddress` with bump search 255→0 and seed limits (≤16 seeds, ≤32 B each).
+- [x] M3.2 Borsh: complete reader (all ints, f32/f64, bool, string, fixed array, `Vec<T>`, `Option<T>`, enums, structs) driven by a runtime schema; guard `Vec` length against remaining bytes before iterating.
+- [x] M3.3 Anchor: discriminators (M0.2), event CPI log parsing (`Program data: <base64>`), IDL JSON → schema (types, accounts, events, instructions).
+- [x] M3.4 Fuzz Borsh/IDL decode. Vectors from Anchor's own test suite; Raydium/Orca swap instruction samples from `test_data/svm_instructions.parquet`.
 
 ### M4: Move (REQ-MOVE-01..02): lane C
-- [ ] M4.1 Address: short-form normalisation (exists), Aptos/Sui display rules, validation.
-- [ ] M4.2 **TypeTag parser:** recursive descent, `vector<T>`, `0xaddr::module::Name<T1, T2>`, depth limit (32), returns zero-alloc view slices.
-- [ ] M4.3 BCS: ints to u256, bool, ULEB128 lengths (canonical-only), option, vector, string, struct via runtime schema; reject non-canonical ULEB and trailing bytes (strict mode).
-- [ ] M4.4 Fuzz BCS/TypeTag; Aptos/Sui published vectors.
+- [x] M4.1 Address: short-form normalisation (exists), Aptos/Sui display rules, validation.
+- [x] M4.2 **TypeTag parser:** recursive descent, `vector<T>`, `0xaddr::module::Name<T1, T2>`, depth limit (32), returns zero-alloc view slices.
+- [x] M4.3 BCS: ints to u256, bool, ULEB128 lengths (canonical-only), option, vector, string, struct via runtime schema; reject non-canonical ULEB and trailing bytes (strict mode).
+- [x] M4.4 Fuzz BCS/TypeTag; Aptos/Sui published vectors.
 
 ### M5: UTXO + Cosmos (REQ-UTXO-01..02, REQ-COSMOS-01): lane D
-- [ ] M5.1 Script classifier: add bare multisig, P2PK, P2WSH validation, witness v1+ unknown; **address derivation** per network (mainnet/testnet/Litecoin HRP + version bytes) via Base58Check and Bech32/Bech32m (M1).
-- [ ] M5.2 Script iterator (push-data decode) with bounds checks; OP_RETURN (M0.3), Runes (`OP_13` + pushes, LEB128 payload) and Ordinals envelope detection.
-- [ ] M5.3 Cosmos: HRP conversion (decode → re-encode with new HRP, checksum valid), address validation, IBC denom trace hash (exists) + trace parsing (`transfer/channel-0/uatom`).
-- [ ] M5.4 Fuzz script classifier/iterator. Vectors from Bitcoin Core `script_tests.json` (classification subset), BIP-173/350/86.
+- [x] M5.1 Script classifier: add bare multisig, P2PK, P2WSH validation, witness v1+ unknown; **address derivation** per network (mainnet/testnet/Litecoin HRP + version bytes) via Base58Check and Bech32/Bech32m (M1).
+- [x] M5.2 Script iterator (push-data decode) with bounds checks; OP_RETURN (M0.3), Runes (`OP_13` + pushes, LEB128 payload) and Ordinals envelope detection.
+- [x] M5.3 Cosmos: HRP conversion (decode → re-encode with new HRP, checksum valid), address validation, IBC denom trace hash (exists) + trace parsing (`transfer/channel-0/uatom`).
+- [x] M5.4 Fuzz script classifier/iterator. Vectors from Bitcoin Core `script_tests.json` (classification subset), BIP-173/350/86.
 
 ### M6: Protocols (REQ-PROT-01..03): lane E (needs M1 math only)
-- [ ] M6.1 CLMM Q64.96: `getSqrtRatioAtTick` / `getTickAtSqrtRatio` (exact Uniswap `TickMath` port, tick range ±887272), `sqrtPriceX96 → price` as scaled decimal with decimals adjustment, `getAmount0/1Delta`, `mulDivRoundingUp`. Differential test vs published `TickMath` test vectors.
-- [ ] M6.2 CLMM Q64.64: Orca `sqrt_price_from_tick_index`, Raydium CLMM tick math, Cetus I32 tick; price decimals.
-- [ ] M6.3 Tokens: ERC-20 `Transfer`/`Approval`, ERC-721 variant (4 topics), ERC-1155 `TransferSingle`; SPL `Transfer`/`TransferChecked`/`Approve` instruction decoders (u8 discriminant + u64 LE).
-- [ ] M6.4 Lending: `rayDiv`, `wadDiv`, `rayPow` (exponentiation by squaring), linear + compounded interest (Aave `MathUtils`), normalised income/debt, health factor (exists; add fuzz that HF is monotone in collateral), Compound exchange-rate math.
+- [x] M6.1 CLMM Q64.96: `getSqrtRatioAtTick` / `getTickAtSqrtRatio` (exact Uniswap `TickMath` port, tick range ±887272), `sqrtPriceX96 → price` as scaled decimal with decimals adjustment, `getAmount0/1Delta`, `mulDivRoundingUp`. Differential test vs published `TickMath` test vectors.
+- [x] M6.2 CLMM Q64.64: Orca `sqrt_price_from_tick_index`, Raydium CLMM tick math, Cetus I32 tick; price decimals.
+- [x] M6.3 Tokens: ERC-20 `Transfer`/`Approval`, ERC-721 variant (4 topics), ERC-1155 `TransferSingle`; SPL `Transfer`/`TransferChecked`/`Approve` instruction decoders (u8 discriminant + u64 LE).
+- [x] M6.4 Lending: `rayDiv`, `wadDiv`, `rayPow` (exponentiation by squaring), linear + compounded interest (Aave `MathUtils`), normalised income/debt, health factor (exists; add fuzz that HF is monotone in collateral), Compound exchange-rate math.
 
 ### M7: Targets (REQ-DUCK-*, REQ-WASM-*): sequential after lanes A–E have a stable API
-- [ ] M7.1 **Function catalogue** `src/targets/catalog.zig`: one declarative table (name, arg types, return type, impl fn) that **both** targets and the SQL generators consume. Single source of truth so DuckDB/WASM/SQL files can never drift.
-- [ ] M7.2 DuckDB bindings: vendor `duckdb_extension.h` (pinned C-API version, `unstable` excluded), translate the function-pointer struct with `@cImport` or a hand-written minimal extern struct; implement `web3_init_c_api` (`DUCKDB_EXTENSION_ENTRYPOINT`), register scalar functions from the catalogue.
-- [ ] M7.3 Vectorized scalar executor: loop 2048-row chunks, validity-mask in/out, BLOB/VARCHAR (`duckdb_string_t` inline vs pointer) in/out, any error → `NULL` (REQ-DUCK-04).
-- [ ] M7.4 Bind-time caching (REQ-DUCK-03): parse ABI/IDL on bind for constant args, store in `bind_data`, free in destroy callback; non-constant argument falls back to per-row parse with a small per-chunk cache keyed by pointer+len.
-- [ ] M7.5 Replace `scripts/package_duckdb.py` footer logic with a `zig build` step (`-Dduckdb_platform=`) so packaging is one command; keep python only for the integration test. Remove the committed `zig-out/`.
-- [ ] M7.6 WASM ABI: exported `alloc/free` over a bump arena (<64 KB scratch), per-function exports `(in_ptr,in_len,out_ptr,out_cap) -> i32 out_len | -1`; SIMD128 enabled in target query (`.cpu_features_add = wasm.featureSet(&.{.simd128})`); `wasm-opt`/`strip`-equivalent via `-fstrip`.
-- [ ] M7.7 Size gate (REQ-WASM-02): `zig build wasm-size` fails if `web3_sql.wasm` ≥ 250 KB; flag matrix builds (evm-only etc.) report sizes in CI.
-- [ ] M7.8 SQL generators (REQ-WASM-03): `zig build wasm` emits `dist/snowflake_udfs.sql` (JS-wrapper UDF embedding base64 wasm) and `dist/bigquery_udfs.sql` (JS UDF with inline wasm bytes) from the catalogue. Golden-file tests of the generated SQL.
-- [ ] M7.9 Integration tests: `scripts/test_duckdb.py` executes every catalogue function against `test_data/*.parquet` and compares to expected values from an independent reference (Python `eth_abi`/`web3`, `solders`, `bech32` in a dev-only venv).
+- [x] M7.1 **Function catalogue** `src/targets/catalog.zig`: one declarative table (name, arg types, return type, impl fn) that **both** targets and the SQL generators consume. Single source of truth so DuckDB/WASM/SQL files can never drift.
+- [x] M7.2 DuckDB bindings: vendor `duckdb_extension.h` (pinned C-API version, `unstable` excluded), translate the function-pointer struct with `@cImport` or a hand-written minimal extern struct; implement `web3_init_c_api` (`DUCKDB_EXTENSION_ENTRYPOINT`), register scalar functions from the catalogue.
+- [x] M7.3 Vectorized scalar executor: loop 2048-row chunks, validity-mask in/out, BLOB/VARCHAR (`duckdb_string_t` inline vs pointer) in/out, any error → `NULL` (REQ-DUCK-04).
+- [x] M7.4 Bind-time caching (REQ-DUCK-03): parse ABI/IDL on bind for constant args, store in `bind_data`, free in destroy callback; non-constant argument falls back to per-row parse with a small per-chunk cache keyed by pointer+len.
+- [x] M7.5 Replace `scripts/package_duckdb.py` footer logic with a `zig build` step (`-Dduckdb_platform=`) so packaging is one command; keep python only for the integration test. Remove the committed `zig-out/`.
+- [x] M7.6 WASM ABI: exported `alloc/free` over a bump arena (<64 KB scratch), per-function exports `(in_ptr,in_len,out_ptr,out_cap) -> i32 out_len | -1`; SIMD128 enabled in target query (`.cpu_features_add = wasm.featureSet(&.{.simd128})`); `wasm-opt`/`strip`-equivalent via `-fstrip`.
+- [x] M7.7 Size gate (REQ-WASM-02): `zig build wasm-size` fails if `web3_sql.wasm` ≥ 250 KB; flag matrix builds (evm-only etc.) report sizes in CI.
+- [x] M7.8 SQL generators (REQ-WASM-03): `zig build wasm` emits `dist/snowflake_udfs.sql` (JS-wrapper UDF embedding base64 wasm) and `dist/bigquery_udfs.sql` (JS UDF with inline wasm bytes) from the catalogue. Golden-file tests of the generated SQL.
+- [x] M7.9 Integration tests: `scripts/test_duckdb.py` executes every catalogue function against `test_data/*.parquet` and compares to expected values from an independent reference (Python `eth_abi`/`web3`, `solders`, `bech32` in a dev-only venv).
 
 **Acceptance:** `SELECT` of every catalogue function works in DuckDB and in a Node/wasmtime harness for WASM; gate on size passes.
 
 ### M8: Performance, security, release
-- [ ] M8.1 Profile hot paths (`perf`/`samply`); target numbers in §6. Candidates: Keccak AVX2/NEON path via std vector ops, batch Keccak API for `topic0` columns, branch-free hex.
-- [ ] M8.2 Memory audit: prove "no global heap allocations in row processing" with a failing allocator in tests (`std.testing.FailingAllocator` set to 0 in row-path tests).
-- [ ] M8.3 Security pass: run all decoders under `-OReleaseSafe` fuzz for 1h each in CI nightly; add `SECURITY.md`; supply-chain: zero deps (keep it).
-- [ ] M8.4 Docs: `docs/FUNCTIONS.md` generated from the catalogue; `docs/ARCHITECTURE.md`; dbt-duckdb example project under `examples/`.
+- [x] M8.1 Profile hot paths (`perf`/`samply`); target numbers in §6. Candidates: Keccak AVX2/NEON path via std vector ops, batch Keccak API for `topic0` columns, branch-free hex.
+- [x] M8.2 Memory audit: prove "no global heap allocations in row processing" with a failing allocator in tests (`std.testing.FailingAllocator` set to 0 in row-path tests).
+- [x] M8.3 Security pass: run all decoders under `-OReleaseSafe` fuzz for 1h each in CI nightly; add `SECURITY.md`; supply-chain: zero deps (keep it).
+- [x] M8.4 Docs: `docs/FUNCTIONS.md` generated from the catalogue; `docs/ARCHITECTURE.md`; dbt-duckdb example project under `examples/`.
 - [ ] M8.5 Release: version bump, tagged artifacts for linux/macos/windows/wasm, DuckDB community-extensions descriptor.
 
 ---
+
+## 2a. Deviations found while executing
+
+- **M1.3:** Base58 uses 58^5 limbs and a 1280-byte bound, not 58^10 and 128 bytes. 58^10 needs u128 division, and real Solana instruction data exceeds 128 bytes.
+- **M7.2:** bindings come from `b.addTranslateC` over the vendored headers.
+- **M7.6:** per-function exports are `(argv, argc, out, cap)`, since most functions take several arguments.
+- **M7.8:** BigQuery cannot inline the bundle (inline code limit 32 KB, external resource limit 1 MB), so it deploys as a GCS library. Snowflake remains inline and untested on a live account.
+- **M8.1:** Keccak-256 and Base58 miss the 1.5 GB/s target. See `docs/PERF.md`.
 
 ## 3. Parallelisation guide for agent teams
 

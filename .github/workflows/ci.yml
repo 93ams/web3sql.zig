@@ -60,4 +60,9 @@ jobs:
           python-version: "3.13"
       - run: pip install -r scripts/requirements-dev.txt "${{ matrix.duckdb }}"
       - run: zig build duckdb
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
       - run: python scripts/test_duckdb.py
+      - run: zig build wasm
+      - run: node scripts/test_wasm.mjs

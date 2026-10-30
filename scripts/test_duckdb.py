@@ -28,13 +28,23 @@ con = duckdb.connect(config={"allow_unsigned_extensions": "true"})
 con.execute(f"LOAD '{EXT}'")
 registered = {r[0] for r in con.execute("select distinct function_name from duckdb_functions() where function_name like 'web3_%'").fetchall()}
 exercised = set()
+recorded = []  # every call, replayed through WASM by scripts/test_wasm.mjs
+signatures = {r[0]: (r[1], r[2]) for r in con.execute(
+    "select function_name, parameter_types, return_type from duckdb_functions() where function_name like 'web3_%'").fetchall()}
+
+
+def portable(v):
+    return {"hex": bytes(v).hex()} if isinstance(v, (bytes, bytearray, memoryview)) else v
 
 
 def q(name, *args):
     """Calls one function through bound parameters, so inputs are never constant-folded into SQL text."""
     exercised.add(name)
     marks = ",".join("?" for _ in args)
-    return con.execute(f"select {name}({marks})", list(args)).fetchone()[0]
+    result = con.execute(f"select {name}({marks})", list(args)).fetchone()[0]
+    recorded.append({"name": name, "args": [portable(a) for a in args], "types": signatures[name][0],
+                     "ret": signatures[name][1], "result": portable(result)})
+    return result
 
 
 def eq(got, want, label):
@@ -428,6 +438,7 @@ CHECKS = [check_hashes, check_encodings, check_math, check_evm, check_svm, check
 
 
 def main():
+    os.makedirs(os.path.join(REPO, "dist"), exist_ok=True)
     print(f"DuckDB {duckdb.__version__}, {len(registered)} functions from {EXT}")
     for check in CHECKS:
         section = check.__name__.removeprefix("check_")
@@ -440,7 +451,9 @@ def main():
     missing = registered - exercised
     if missing:
         sys.exit(f"catalogue functions with no reference check: {sorted(missing)}")
-    print("SUCCESS")
+    with open(os.path.join(REPO, "dist", "duckdb_calls.json"), "w") as f:
+        json.dump(recorded, f)
+    print(f"SUCCESS: {len(recorded)} calls recorded")
 
 
 if __name__ == "__main__":
