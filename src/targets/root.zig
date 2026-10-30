@@ -10,6 +10,9 @@ const sections = [_]struct { enabled: bool, path: type }{
     .{ .enabled = build_options.chain_move, .path = if (build_options.chain_move) @import("functions_move.zig") else void },
     .{ .enabled = build_options.chain_utxo, .path = if (build_options.chain_utxo) @import("functions_utxo.zig") else void },
     .{ .enabled = build_options.chain_cosmos, .path = if (build_options.chain_cosmos) @import("functions_cosmos.zig") else void },
+    .{ .enabled = build_options.protocol_clmm, .path = if (build_options.protocol_clmm) @import("functions_clmm.zig") else void },
+    .{ .enabled = build_options.protocol_tokens, .path = if (build_options.protocol_tokens) @import("functions_tokens.zig") else void },
+    .{ .enabled = build_options.protocol_lending, .path = if (build_options.protocol_lending) @import("functions_lending.zig") else void },
 };
 
 /// Every function enabled by the build flags.

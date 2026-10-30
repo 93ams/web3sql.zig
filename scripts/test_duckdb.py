@@ -189,6 +189,104 @@ def check_cosmos():
     eq(q("web3_ibc_base_denom", "transfer/channel-0/uatom"), "uatom", "base denom")
 
 
+def check_clmm():
+    from decimal import Decimal, getcontext
+    from fractions import Fraction
+
+    getcontext().prec = 120
+    rng = random.Random(5)
+    # TickMath.sol MIN_SQRT_RATIO and MAX_SQRT_RATIO
+    eq(q("web3_uni_sqrt_ratio_at_tick", -887272), "4295128739", "min sqrt ratio")
+    eq(q("web3_uni_sqrt_ratio_at_tick", 887272), "1461446703485210103287273052203988822378723970342", "max sqrt ratio")
+    for tick in [0, 1, -1, 887272, -887272] + [rng.randint(-887272, 887272) for _ in range(100)]:
+        sqrt = int(q("web3_uni_sqrt_ratio_at_tick", tick))
+        want = (Decimal("1.0001") ** (Decimal(tick) / 2)) * 2**96
+        assert abs(Decimal(sqrt) / want - 1) < Decimal("1e-6"), (tick, sqrt)
+        if tick != 887272:  # MAX_SQRT_RATIO is exclusive in getTickAtSqrtRatio
+            eq(q("web3_uni_tick_at_sqrt_ratio", str(sqrt)), tick, "tick round trip")
+        d0, d1 = rng.randint(0, 18), rng.randint(0, 18)
+        exact = Fraction(sqrt * sqrt, 2**192) * Fraction(10) ** (d0 - d1)
+        scaled = int(exact * 10**18)
+        got = q("web3_uni_sqrt_price_to_price", str(sqrt), d0, d1, 18)
+        eq(int(got.replace(".", "")), scaled, "exact price")
+        eq(q("web3_uni_tick_to_price", tick, d0, d1, 18), got, "tick price")
+    q96 = 2**96
+    for _ in range(100):
+        a, b = sorted(rng.randint(2**70, 2**150) for _ in range(2))
+        liq = rng.getrandbits(100)
+        eq(q("web3_uni_amount1_delta", str(a), str(b), str(liq), 0), str(liq * (b - a) // q96), "amount1 floor")
+        eq(q("web3_uni_amount1_delta", str(a), str(b), str(liq), 1), str(-(-liq * (b - a) // q96)), "amount1 ceil")
+        eq(q("web3_uni_amount0_delta", str(a), str(b), str(liq), 0), str(((liq << 96) * (b - a) // b) // a), "amount0 floor")
+        eq(q("web3_uni_amount0_delta", str(a), str(b), str(liq), 1), str(-(-(-(-(liq << 96) * (b - a) // b)) // a)), "amount0 ceil")
+    for dex, bound in (("orca", 443636), ("raydium", 443636), ("cetus", 443636)):
+        for tick in [0, bound, -bound] + [rng.randint(-bound, bound) for _ in range(100)]:
+            sqrt = int(q(f"web3_{dex}_sqrt_price_from_tick", tick))
+            want = (Decimal("1.0001") ** (Decimal(tick) / 2)) * 2**64
+            assert abs(Decimal(sqrt) / want - 1) < Decimal("1e-8"), (dex, tick, sqrt)
+            # Raydium's tick_math excludes MAX_SQRT_PRICE_X64 from the inverse
+            want_tick = None if dex == "raydium" and tick == bound else tick
+            eq(q(f"web3_{dex}_tick_from_sqrt_price", str(sqrt)), want_tick, f"{dex} round trip")
+    sqrt = 3 << 63
+    got = q("web3_x64_sqrt_price_to_price", str(sqrt), 6, 6, 4)
+    eq(got, "2.2500", "x64 price")
+
+
+def check_tokens():
+    from eth_abi import encode
+
+    transfer = keccak256(b"Transfer(address,address,uint256)")
+    approval = keccak256(b"Approval(address,address,uint256)")
+    a, b = bytes(range(20)), bytes(range(20, 40))
+    word = lambda x: x.rjust(32, b"\0")
+    v = 10**30
+    got = json.loads(q("web3_erc_decode_json", transfer + word(a) + word(b), encode(["uint256"], [v])))
+    eq((got["event"], got["from"], got["to"], str(got["value"])), ("erc20_transfer", "0x" + a.hex(), "0x" + b.hex(), str(v)), "erc20")
+    got = json.loads(q("web3_erc_decode_json", approval + word(a) + word(b), encode(["uint256"], [5])))
+    eq(str(got["value"]), "5", "approval")
+    got = json.loads(q("web3_erc_decode_json", transfer + word(a) + word(b) + word(b"\x07"), b""))
+    eq((got["event"], str(got["token_id"])), ("erc721_transfer", "7"), "erc721")
+    eq(q("web3_erc_decode_json", b"\x01", b""), None, "bad topics is NULL")
+    got = json.loads(q("web3_spl_decode_json", b"\x03" + struct.pack("<Q", 42)))
+    eq((got["type"], got["amount"]), ("transfer", 42), "spl transfer")
+    got = json.loads(q("web3_spl_decode_json", b"\x0c" + struct.pack("<QB", 42, 6)))
+    eq((got["amount"], got["decimals"]), (42, 6), "spl checked")
+
+
+def check_lending():
+    WAD, RAY, YEAR = 10**18, 10**27, 365 * 24 * 3600
+    rng = random.Random(6)
+    half = lambda a, b, u: (a * b + u // 2) // u
+    div = lambda a, b, u: (a * u + b // 2) // b
+    for _ in range(100):
+        a, b = rng.getrandbits(100) + 1, rng.getrandbits(100) + 1
+        eq(q("web3_wad_mul", str(a), str(b)), str(half(a, b, WAD)), "wadMul")
+        eq(q("web3_ray_mul", str(a), str(b)), str(half(a, b, RAY)), "rayMul")
+        eq(q("web3_wad_div", str(a), str(b)), str(div(a, b, WAD)), "wadDiv")
+        eq(q("web3_ray_div", str(a), str(b)), str(div(a, b, RAY)), "rayDiv")
+        rate = rng.randint(0, RAY)
+        dt = rng.randint(1, YEAR)
+        linear = rate * dt // YEAR + RAY
+        eq(q("web3_aave_linear_interest", str(rate), 1000, 1000 + dt), str(linear), "linear")
+        idx = rng.randint(RAY, 3 * RAY)
+        eq(q("web3_aave_normalized_income", str(rate), str(idx), 1000, 1000 + dt), str(half(linear, idx, RAY)), "income")
+        import math
+        want = math.exp(rate / RAY * dt / YEAR)
+        for fn in ("web3_aave_compounded_interest", "web3_aave_compounded_interest_legacy"):
+            got = int(q(fn, str(rate), 1000, 1000 + dt)) / RAY
+            assert abs(got / want - 1) < 0.02, (fn, rate, dt, got, want)
+        for fn, g in (("web3_aave_normalized_debt", "web3_aave_compounded_interest"), ("web3_aave_normalized_debt_legacy", "web3_aave_compounded_interest_legacy")):
+            eq(q(fn, str(rate), str(idx), 1000, 1000 + dt), str(half(int(q(g, str(rate), 1000, 1000 + dt)), idx, RAY)), "debt")
+    base = RAY + RAY // 100
+    want = RAY
+    for _ in range(5):
+        want = half(want, base, RAY)
+    eq(q("web3_ray_pow", str(base), "5"), str(want), "rayPow")
+    eq(q("web3_aave_health_factor", str(2 * WAD), 8000, str(WAD)), str(16 * WAD // 10), "health factor")
+    cash, borrows, reserves, supply = 10**24, 5 * 10**23, 10**22, 7 * 10**24
+    eq(q("web3_compound_exchange_rate", str(cash), str(borrows), str(reserves), str(supply), "1"),
+       str((cash + borrows - reserves) * WAD // supply), "exchange rate")
+
+
 def check_vector_semantics():
     """REQ-DUCK-02: flat, constant, dictionary, filtered and NULL-bearing vectors over many chunks."""
     rows = con.execute("""
@@ -260,14 +358,14 @@ def check_parquet():
 
 
 CHECKS = [check_hashes, check_encodings, check_math, check_svm, check_move, check_utxo, check_cosmos,
-          check_vector_semantics, check_schema_binding, check_garbage, check_parquet]
+          check_clmm, check_tokens, check_lending, check_vector_semantics, check_schema_binding, check_garbage, check_parquet]
 
 
 def main():
     print(f"DuckDB {duckdb.__version__}, {len(registered)} functions from {EXT}")
     for check in CHECKS:
         section = check.__name__.removeprefix("check_")
-        needs = {"svm": "web3_sol_pda", "move": "web3_bcs_decode", "utxo": "web3_btc_address", "cosmos": "web3_ibc_denom"}.get(section)
+        needs = {"svm": "web3_sol_pda", "move": "web3_bcs_decode", "utxo": "web3_btc_address", "cosmos": "web3_ibc_denom", "clmm": "web3_uni_tick_to_price", "tokens": "web3_erc_decode_json", "lending": "web3_ray_mul"}.get(section)
         if needs and needs not in registered:
             print(f"  skipped {section}: not in this build")
             continue

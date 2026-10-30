@@ -62,6 +62,8 @@ fn Adapter(comptime impl: anytype, comptime skip: usize, comptime ret: RetType) 
                     tuple[i] = args[i - skip].bytes;
                 } else if (T == []u8) {
                     tuple[i] = dest;
+                } else if (T == bool) {
+                    tuple[i] = args[i - skip].int != 0;
                 } else if (@typeInfo(T) == .int) {
                     tuple[i] = std.math.cast(T, args[i - skip].int) orelse return error.Failed;
                 } else {
