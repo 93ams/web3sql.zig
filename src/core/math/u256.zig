@@ -15,19 +15,90 @@ pub const MathError = error{
 /// Longest decimal rendering of a u256 / i256 (i256 min has a sign and 77 digits).
 pub const MAX_DECIMAL_LEN: usize = 78;
 
+const Quotient = struct { q: u512, inexact: bool };
+
+/// Knuth algorithm D over 64-bit limbs. Generic u512 division goes through compiler-rt's 32-bit
+/// limb routine, which is several times slower and dominates tick and price math.
+fn divWide(n: u512, d: u256) Quotient {
+    if (d & (d - 1) == 0) {
+        const shift: u9 = @intCast(@ctz(d));
+        return .{ .q = n >> shift, .inexact = n & ((@as(u512, 1) << shift) - 1) != 0 };
+    }
+    const nd: usize = 4 - @clz(d) / 64;
+    if (nd == 1) {
+        const v: u64 = @intCast(d);
+        var q: u512 = 0;
+        var rem: u64 = 0;
+        var i: usize = 8;
+        while (i > 0) {
+            i -= 1;
+            const acc = (@as(u128, rem) << 64) | @as(u64, @truncate(n >> @intCast(i * 64)));
+            q = (q << 64) | @as(u64, @intCast(acc / v));
+            rem = @intCast(acc % v);
+        }
+        return .{ .q = q, .inexact = rem != 0 };
+    }
+
+    const shift: u9 = @clz(d) % 64;
+    const dn = d << @intCast(shift);
+    var v: [4]u64 = undefined;
+    for (&v, 0..) |*l, i| l.* = @truncate(dn >> @intCast(i * 64));
+    var u: [9]u64 = undefined;
+    const wide = @as(u576, n) << shift;
+    for (&u, 0..) |*l, i| l.* = @truncate(wide >> @intCast(i * 64));
+
+    const top: u128 = v[nd - 1];
+    const next: u128 = v[nd - 2];
+    var q: u512 = 0;
+    var j: usize = 8 - nd + 1;
+    while (j > 0) {
+        j -= 1;
+        const num = (@as(u128, u[j + nd]) << 64) | u[j + nd - 1];
+        var qhat = num / top;
+        var rhat = num % top;
+        while (qhat >> 64 != 0 or qhat * next > ((rhat << 64) | u[j + nd - 2])) {
+            qhat -= 1;
+            rhat += top;
+            if (rhat >> 64 != 0) break;
+        }
+        // Multiply and subtract qhat * v from u[j..j + nd].
+        var mul_carry: u64 = 0;
+        var borrow: u1 = 0;
+        for (0..nd) |i| {
+            const p = qhat * v[i] + mul_carry;
+            mul_carry = @intCast(p >> 64);
+            const a, const b1 = @subWithOverflow(u[i + j], @as(u64, @truncate(p)));
+            u[i + j], const b2 = @subWithOverflow(a, borrow);
+            borrow = b1 | b2;
+        }
+        const a, const b1 = @subWithOverflow(u[j + nd], mul_carry);
+        u[j + nd], const b2 = @subWithOverflow(a, borrow);
+        if (b1 | b2 != 0) {
+            qhat -= 1;
+            var carry: u1 = 0;
+            for (0..nd) |i| {
+                const s1, const c1 = @addWithOverflow(u[i + j], v[i]);
+                u[i + j], const c2 = @addWithOverflow(s1, carry);
+                carry = c1 | c2;
+            }
+            u[j + nd] +%= carry;
+        }
+        q = (q << 64) | @as(u64, @intCast(qhat));
+    }
+    return .{ .q = q, .inexact = !std.mem.allEqual(u64, u[0..nd], 0) };
+}
+
 /// Computes floor((a * b) / c) with intermediate u512 precision.
 pub fn mulDiv(a: u256, b: u256, c: u256) MathError!u256 {
     if (c == 0) return MathError.DivisionByZero;
-    const prod = @as(u512, a) * b;
-    return std.math.cast(u256, prod / c) orelse MathError.Overflow;
+    return std.math.cast(u256, divWide(@as(u512, a) * b, c).q) orelse MathError.Overflow;
 }
 
 /// Computes ceil((a * b) / c), Uniswap `FullMath.mulDivRoundingUp`.
 pub fn mulDivRoundingUp(a: u256, b: u256, c: u256) MathError!u256 {
     if (c == 0) return MathError.DivisionByZero;
-    const prod = @as(u512, a) * b;
-    const quotient = prod / c;
-    const rounded = quotient + @intFromBool(prod % c != 0);
+    const r = divWide(@as(u512, a) * b, c);
+    const rounded = @as(u513, r.q) + @intFromBool(r.inexact);
     return std.math.cast(u256, rounded) orelse MathError.Overflow;
 }
 
@@ -173,6 +244,14 @@ test "REQ-CORE-01 i256 edges" {
     try std.testing.expectEqual(@as(i256, -4), try divFloor(-7, 2));
 }
 
+test "REQ-CORE-01 mulDiv Knuth add-back case" {
+    // Hacker's Delight divmnu test: forces the qhat correction then the add-back.
+    const n: u512 = (@as(u512, 0x8000000000000000) << 192) | (@as(u512, 0x7fffffffffffffff) << 64);
+    const d: u256 = (@as(u256, 0x8000000000000000) << 64) | 1;
+    try std.testing.expectEqual(@as(u512, n / d), divWide(n, d).q);
+    try std.testing.expectEqual(n % d != 0, divWide(n, d).inexact);
+}
+
 test "REQ-CORE-01 mulDivRoundingUp and isqrt" {
     try std.testing.expectEqual(@as(u256, 3), try mulDivRoundingUp(5, 1, 2));
     try std.testing.expectEqual(@as(u256, 2), try mulDivRoundingUp(4, 1, 2));
@@ -236,11 +315,16 @@ test "REQ-CORE-01 property: mulDiv, signed division, isqrt, format vs big.int or
     defer r.deinit();
     var buf: [MAX_DECIMAL_LEN + 1]u8 = undefined;
 
-    for (0..2000) |_| {
+    for (0..20_000) |_| {
         // Vary magnitude so small, overflowing and non-overflowing cases are all hit.
         const x = rand.int(u256) >> rand.int(u8);
         const y = rand.int(u256) >> rand.int(u8);
-        const z = (rand.int(u256) >> rand.int(u8)) | 1;
+        const z = switch (rand.uintLessThan(u8, 4)) {
+            0 => @as(u256, 1) << rand.int(u8),
+            // near-power-of-two limbs exercise the Knuth add-back branch
+            1 => (@as(u256, std.math.maxInt(u256)) >> rand.int(u8)) << @as(u8, rand.int(u6)),
+            else => (rand.int(u256) >> rand.int(u8)) | 1,
+        };
         try a.set(x);
         try b.set(y);
         try c.set(z);
