@@ -119,13 +119,16 @@ pub fn build(b: *std.Build) void {
     run_step.dependOn(&run_cmd.step);
 
     // Tests Step
+    // `--fuzz` needs LLVM's coverage instrumentation; the self-hosted backend reports zero PCs.
     const mod_tests = b.addTest(.{
         .root_module = mod,
+        .use_llvm = true,
     });
     const run_mod_tests = b.addRunArtifact(mod_tests);
 
     const exe_tests = b.addTest(.{
         .root_module = exe.root_module,
+        .use_llvm = true,
     });
     const run_exe_tests = b.addRunArtifact(exe_tests);
 

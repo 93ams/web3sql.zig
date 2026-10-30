@@ -77,7 +77,7 @@ Dependencies: `M0 → M1 → {M2, M3, M4, M5} → M6 → M7 → M8`. Items insid
 - [x] M2.4 **Head/tail decoder:** static and dynamic types, nested tuples/arrays, offset/length bounds checks, cycle/overlap-safe (offset must stay within data; total work capped by `data.len`). Output as a flat "value cursor" API (no allocation) plus `decodeField(path)` for SQL extraction of one field.
 - [x] M2.5 **Log decoding:** `topics[1..]` for indexed params, `data` for the rest; dynamic indexed params surface as their hash.
 - [x] M2.6 Calldata decoding: selector match + args.
-- [ ] M2.7 Fuzz: ABI decoder, signature parser. Known-answer: Uniswap v3 `Swap`, ERC-20 `Transfer`, Seaport `OrderFulfilled`.
+- [x] M2.7 Fuzz: ABI decoder, signature parser. Known-answer: Uniswap v3 `Swap`, ERC-20 `Transfer`, Seaport `OrderFulfilled`.
 
 **Acceptance:** ≥ 500k decoded Swap logs/s/core on bench; fuzz 10M iterations clean.
 
