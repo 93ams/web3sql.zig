@@ -113,6 +113,29 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_mod_tests.step);
     test_step.dependOn(&run_exe_tests.step);
 
+    // Benchmarks always run optimized, whatever -Doptimize says for the rest of the build.
+    const bench_exe = b.addExecutable(.{
+        .name = "web3sql-bench",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("bench/main.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+            .imports = &.{
+                .{
+                    .name = "web3sql",
+                    .module = b.createModule(.{
+                        .root_source_file = b.path("src/root.zig"),
+                        .target = target,
+                        .optimize = .ReleaseFast,
+                        .imports = &.{.{ .name = "build_options", .module = options_mod }},
+                    }),
+                },
+            },
+        }),
+    });
+    const bench_step = b.step("bench", "Run throughput benchmarks (ReleaseFast)");
+    bench_step.dependOn(&b.addRunArtifact(bench_exe).step);
+
     // DuckDB Extension Target
     const duckdb_lib = b.addLibrary(.{
         .linkage = .dynamic,

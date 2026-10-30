@@ -7,50 +7,64 @@ pub const VarintError = error{
     NonCanonical,
 };
 
-/// Encodes a 64-bit unsigned integer as ULEB128.
-pub fn encodeUleb128(val: u64, dest: []u8) VarintError!usize {
+/// Encodes an unsigned integer of any width as ULEB128.
+pub fn encodeUleb(comptime T: type, val: T, dest: []u8) VarintError!usize {
     var v = val;
     var idx: usize = 0;
     while (true) {
         if (idx >= dest.len) return VarintError.BufferTooSmall;
-        var byte: u8 = @intCast(v & 0x7F);
-        v >>= 7;
-        if (v != 0) {
-            byte |= 0x80;
-        }
-        dest[idx] = byte;
+        const low: u7 = @truncate(v);
+        v = if (@bitSizeOf(T) > 7) v >> 7 else 0;
+        dest[idx] = @as(u8, low) | (if (v != 0) @as(u8, 0x80) else 0);
         idx += 1;
-        if (v == 0) break;
+        if (v == 0) return idx;
     }
-    return idx;
 }
 
-pub const Decoded = struct { value: u64, bytes_read: usize };
+/// Encodes a 64-bit unsigned integer as ULEB128.
+pub fn encodeUleb128(val: u64, dest: []u8) VarintError!usize {
+    return encodeUleb(u64, val, dest);
+}
 
-/// Decodes a ULEB128 varint from src, returning decoded value and bytes consumed.
-/// Accepts non-minimal encodings (e.g. 0x80 0x00); use `decodeUleb128Strict` where canonical form is required.
-pub fn decodeUleb128(src: []const u8) VarintError!Decoded {
-    var result: u64 = 0;
+pub fn DecodedOf(comptime T: type) type {
+    return struct { value: T, bytes_read: usize };
+}
+
+pub const Decoded = DecodedOf(u64);
+
+/// Decodes a ULEB128 varint into `T`. Non-minimal encodings are accepted up to the width of `T`;
+/// use `decodeUlebStrict` where canonical form is required.
+pub fn decodeUleb(comptime T: type, src: []const u8) VarintError!DecodedOf(T) {
+    const bits = @typeInfo(T).int.bits;
+    const max_bytes = (bits + 6) / 7;
+    var result: T = 0;
     for (src, 0..) |byte, idx| {
+        if (idx >= max_bytes) return VarintError.Overflow;
         const shift = idx * 7;
-        const val: u64 = byte & 0x7F;
-        if (val != 0) {
-            if (shift >= 64) return VarintError.Overflow;
-            // bits that would be shifted out of 64
-            if (shift > 57 and (val >> @intCast(64 - shift)) != 0) return VarintError.Overflow;
-            result |= val << @intCast(shift);
-        }
+        const val: T = byte & 0x7F;
+        if (shift + 7 > bits and (val >> @intCast(bits - shift)) != 0) return VarintError.Overflow;
+        result |= val << @intCast(shift);
         if ((byte & 0x80) == 0) return .{ .value = result, .bytes_read = idx + 1 };
-        if (idx >= 9) return VarintError.Overflow; // a u64 never needs an 11th byte
     }
     return VarintError.UnexpectedEndOfBuffer;
 }
 
-/// Like `decodeUleb128` but rejects non-minimal encodings (trailing zero group), as BCS requires.
-pub fn decodeUleb128Strict(src: []const u8) VarintError!Decoded {
-    const d = try decodeUleb128(src);
+/// Like `decodeUleb` but rejects non-minimal encodings (trailing zero group), as BCS requires.
+pub fn decodeUlebStrict(comptime T: type, src: []const u8) VarintError!DecodedOf(T) {
+    const d = try decodeUleb(T, src);
     if (d.bytes_read > 1 and src[d.bytes_read - 1] == 0) return VarintError.NonCanonical;
     return d;
+}
+
+/// Decodes a ULEB128 varint from src, returning decoded value and bytes consumed.
+/// Accepts non-minimal encodings (e.g. 0x80 0x00); use `decodeUleb128Strict` where canonical form is required.
+pub fn decodeUleb128(src: []const u8) VarintError!Decoded {
+    return decodeUleb(u64, src);
+}
+
+/// Strict u64 ULEB128, the BCS length prefix.
+pub fn decodeUleb128Strict(src: []const u8) VarintError!Decoded {
+    return decodeUlebStrict(u64, src);
 }
 
 test "uleb128 roundtrip" {
@@ -77,6 +91,30 @@ test "uleb128 malformed input never panics" {
     try std.testing.expectEqual(@as(u64, std.math.maxInt(u64)), (try decodeUleb128Strict(&max)).value);
 }
 
+test "REQ-CORE-02 uleb128 wide widths and boundaries" {
+    var buf: [40]u8 = undefined;
+    const max128: u128 = std.math.maxInt(u128);
+    const max256: u256 = std.math.maxInt(u256);
+    const n128 = try encodeUleb(u128, max128, &buf);
+    try std.testing.expectEqual(@as(usize, 19), n128);
+    try std.testing.expectEqual(max128, (try decodeUlebStrict(u128, buf[0..n128])).value);
+    try std.testing.expectError(VarintError.Overflow, decodeUleb(u64, buf[0..n128]));
+    const n256 = try encodeUleb(u256, max256, &buf);
+    try std.testing.expectEqual(@as(usize, 37), n256);
+    try std.testing.expectEqual(max256, (try decodeUlebStrict(u256, buf[0..n256])).value);
+    // top byte of an 18-group u128 holds at most 2 bits
+    var over: [19]u8 = @splat(0xFF);
+    over[18] = 0x04;
+    try std.testing.expectError(VarintError.Overflow, decodeUleb(u128, &over));
+    over[18] = 0x03;
+    try std.testing.expectEqual(max128, (try decodeUleb(u128, &over)).value);
+    // spec example: 624485 = E5 8E 26
+    const n = try encodeUleb(u32, 624485, &buf);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0xE5, 0x8E, 0x26 }, buf[0..n]);
+    try std.testing.expectError(VarintError.BufferTooSmall, encodeUleb(u32, 624485, buf[0..2]));
+    try std.testing.expectError(VarintError.NonCanonical, decodeUlebStrict(u128, &[_]u8{ 0x80, 0x80, 0x00 }));
+}
+
 test "uleb128 fuzz" {
     try std.testing.fuzz({}, struct {
         fn f(_: void, smith: *std.testing.Smith) !void {
@@ -84,6 +122,8 @@ test "uleb128 fuzz" {
             const n = smith.slice(&buf);
             _ = decodeUleb128(buf[0..n]) catch {};
             _ = decodeUleb128Strict(buf[0..n]) catch {};
+            _ = decodeUlebStrict(u128, buf[0..n]) catch {};
+            _ = decodeUlebStrict(u256, buf[0..n]) catch {};
         }
     }.f, .{});
 }

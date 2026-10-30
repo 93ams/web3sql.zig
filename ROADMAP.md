@@ -58,15 +58,15 @@ Dependencies: `M0 → M1 → {M2, M3, M4, M5} → M6 → M7 → M8`. Items insid
 **Acceptance:** A1–A4, A13 closed; CI matrix green.
 
 ### M1: Core layer (REQ-CORE-01..03)
-- [ ] M1.1 **Math:** `I256` signed ops (`checkedAdd/Sub/Mul`, `divTrunc`, `divFloor`), `mulDivRoundingUp`, `isqrt`, decimal parse/format for u256/i256 (hot path for SQL `VARCHAR`/`DECIMAL(38)` bridging), `u256 ⇄ [32]u8` big/little endian. Property tests vs `std.math.big.int` oracle.
-- [ ] M1.2 **Hex:** SIMD (`@Vector(16,u8)`) encode + decode with scalar tail; throughput bench ≥ 1.5 GB/s.
-- [ ] M1.3 **Base58:** O(n·limbs) encode with base-58^10 limbs, decode, Base58Check (double-SHA256 4-byte checksum), size-bounded inputs (≤ 128 B documented), no hidden 512-byte stack buffer. Vectors: Bitcoin Core `base58_encode_decode.json`.
-- [ ] M1.4 **Bech32/Bech32m:** full encode/decode/convert-bits (BIP-173/350 vectors incl. invalid cases), HRP validation, Segwit address helpers.
-- [ ] M1.5 **Base64/Base64URL:** padded/unpadded, strict mode; RFC 4648 vectors.
-- [ ] M1.6 **ULEB128/varint:** u64 + u128 + u256, canonical-encoding check (BCS requires minimal), overlong rejection.
-- [ ] M1.7 **Crypto:** thin wrappers already delegate to `std.crypto`; add `hash160`, `sha256d`, `keccak256` streaming + batch API; RIPEMD160 vs official vectors; verify Blake3 against official test vectors; confirm SIMD hash throughput in `bench/`.
-- [ ] M1.8 **Ed25519 point validity** (`core/crypto/ed25519.zig`): `isOnCurve(32 bytes)` using `std.crypto.ecc.Edwards25519.fromBytes` (needed by M3 PDA).
-- [ ] M1.9 `bench/` harness (`zig build bench`) emitting MB/s and ops/s; baseline numbers committed in `docs/PERF.md`.
+- [x] M1.1 **Math:** `I256` signed ops (`checkedAdd/Sub/Mul`, `divTrunc`, `divFloor`), `mulDivRoundingUp`, `isqrt`, decimal parse/format for u256/i256 (hot path for SQL `VARCHAR`/`DECIMAL(38)` bridging), `u256 ⇄ [32]u8` big/little endian. Property tests vs `std.math.big.int` oracle.
+- [x] M1.2 **Hex:** SIMD (`@Vector(16,u8)`) encode + decode with scalar tail; throughput bench ≥ 1.5 GB/s.
+- [x] M1.3 **Base58:** O(n·limbs) encode with base-58^10 limbs, decode, Base58Check (double-SHA256 4-byte checksum), size-bounded inputs (≤ 128 B documented), no hidden 512-byte stack buffer. Vectors: Bitcoin Core `base58_encode_decode.json`.
+- [x] M1.4 **Bech32/Bech32m:** full encode/decode/convert-bits (BIP-173/350 vectors incl. invalid cases), HRP validation, Segwit address helpers.
+- [x] M1.5 **Base64/Base64URL:** padded/unpadded, strict mode; RFC 4648 vectors.
+- [x] M1.6 **ULEB128/varint:** u64 + u128 + u256, canonical-encoding check (BCS requires minimal), overlong rejection.
+- [x] M1.7 **Crypto:** thin wrappers already delegate to `std.crypto`; add `hash160`, `sha256d`, `keccak256` streaming + batch API; RIPEMD160 vs official vectors; verify Blake3 against official test vectors; confirm SIMD hash throughput in `bench/`.
+- [x] M1.8 **Ed25519 point validity** (`core/crypto/ed25519.zig`): `isOnCurve(32 bytes)` using `std.crypto.ecc.Edwards25519.fromBytes` (needed by M3 PDA).
+- [x] M1.9 `bench/` harness (`zig build bench`) emitting MB/s and ops/s; baseline numbers committed in `docs/PERF.md`.
 
 **Acceptance:** all REQ-CORE ids covered; bench meets §6 targets or the gap is written down in `docs/PERF.md`.
 

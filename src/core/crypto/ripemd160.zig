@@ -204,3 +204,24 @@ test "ripemd160 standard test vectors" {
     const expected_abc = "\x8e\xb2\x08\xf7\xe0\x5d\x98\x7a\x9b\x04\x4a\x8e\x98\xc6\xb0\x87\xf1\x5a\x0b\xfc";
     try std.testing.expectEqualStrings(expected_abc, &out);
 }
+
+test "REQ-CORE-03 ripemd160 official vectors" {
+    // homes.esat.kuleuven.be/~bosselae/ripemd160.html, "Test vectors" table.
+    const cases = [_][2][]const u8{
+        .{ "", "9c1185a5c5e9fc54612808977ee8f548b2258d31" },
+        .{ "a", "0bdc9d2d256b3ee9daae347be6f4dc835a467ffe" },
+        .{ "abc", "8eb208f7e05d987a9b044a8e98c6b087f15a0bfc" },
+        .{ "message digest", "5d0689ef49d2fae572b881b123a85ffa21595f36" },
+        .{ "abcdefghijklmnopqrstuvwxyz", "f71c27109c692c1b56bbdceb5b9d2865b3708dbc" },
+        .{ "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq", "12a053384a9c0c88e405a06c27dcf49ada62eb2b" },
+        .{ "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789", "b0e20b6e3116640286ed3a87a5713079b21f5189" },
+        .{ "12345678901234567890123456789012345678901234567890123456789012345678901234567890", "9b752e45573d4b39f4dbd3323cab82bf63326bfb" },
+    };
+    var out: [DIGEST_LENGTH]u8 = undefined;
+    var expected: [DIGEST_LENGTH]u8 = undefined;
+    for (cases) |c| {
+        hash(c[0], &out);
+        _ = try std.fmt.hexToBytes(&expected, c[1]);
+        try std.testing.expectEqualSlices(u8, &expected, &out);
+    }
+}
