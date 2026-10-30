@@ -28,7 +28,8 @@ pub const IdlError = Allocator.Error || error{
 pub const DecodeError = borsh.BorshError || anchor.AnchorError || error{ UnknownDiscriminator, UnsupportedType };
 
 pub const MAX_JSON_DEPTH = 64;
-const MAX_TYPE_DEPTH = 32;
+/// A struct costs the resolver at most two levels for each one it costs the decoder.
+const MAX_TYPE_DEPTH = 2 * borsh.MAX_DEPTH;
 
 /// One instruction (args), account or event: discriminator prefix plus the schema of what follows it.
 /// `ty` is null when the schema uses a construct this parser rejects (generics, maps); decoding it yields UnsupportedType
@@ -443,6 +444,7 @@ test "REQ-SVM-02 idl type sharing is linear and named chains are depth-limited" 
     defer arena.deinit();
     const a = arena.allocator();
     const idl = try Idl.parse(a, try chainIdl(a, 12));
+    _ = try Idl.parse(a, try chainIdl(a, 60)); // about as deep as `borsh.MAX_DEPTH` can decode
     try std.testing.expectEqual(@as(u64, 1) << 11, idl.instructions[0].ty.?.record.fields[0].ty.vec.elem.minSize());
     // Without a depth carried through named types this recurses once per type and overflows the stack.
     try std.testing.expectError(error.TypeTooDeep, Idl.parse(a, try chainIdl(a, 20_000)));

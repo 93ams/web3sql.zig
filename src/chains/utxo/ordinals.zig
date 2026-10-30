@@ -59,7 +59,7 @@ pub fn find(witness_script: []const u8) OrdError!?Inscription {
             continue;
         }
         p2 = p1;
-        p1 = ins.opcode;
+        p1 = if (ins.isPush() and ins.data.len == 0) script.OP_0 else ins.opcode; // ord compares the pushed bytes
     }
     return found;
 }
@@ -168,6 +168,8 @@ test "REQ-UTXO-02 ordinals bad envelopes do not hide later ones, per ord envelop
     const good = [_]u8{ 0x00, 0x63, 0x03, 'o', 'r', 'd', 0x00, 0x02, 'h', 'i', 0x68 };
     var buf: [8]u8 = undefined;
     try std.testing.expectEqualStrings("hi", try (try find(&(bad ++ good))).?.readBody(&buf));
+    // OP_PUSHDATA1 of nothing opens an envelope just as OP_0 does.
+    try std.testing.expectEqualStrings("hi", try (try find(&([_]u8{0x4c} ++ good))).?.readBody(&buf));
     // First envelope wins when both are good.
     try std.testing.expectEqualStrings("hi", try (try find(&(good ++ [_]u8{ 0x00, 0x63, 0x03, 'o', 'r', 'd', 0x68 }))).?.readBody(&buf));
     // A script that stops decoding drops every envelope, even one already complete.
