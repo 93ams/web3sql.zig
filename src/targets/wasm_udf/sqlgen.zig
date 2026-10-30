@@ -141,14 +141,14 @@ fn typeName(kind: anytype) []const u8 {
 /// docs/FUNCTIONS.md, so the reference cannot drift from the catalogue.
 pub fn writeFunctionDocs(w: *Writer, functions: []const catalog.Function) Writer.Error!void {
     try w.writeAll(
-        \# SQL functions
-        \
-        \Generated from the function catalogue by `zig build docs`. Any malformed row returns `NULL`.
-        \Types are DuckDB's. Functions marked *DuckDB only* parse JSON, and are left out of the WASM bundle to fit its size budget.
-        \
-        \| Function | Returns | Description |
-        \|---|---|---|
-        \
+        \\# SQL functions
+        \\
+        \\Generated from the function catalogue by `zig build docs`. Any malformed row returns `NULL`.
+        \\Types are DuckDB's. Functions marked *DuckDB only* parse JSON, and are left out of the WASM bundle to fit its size budget.
+        \\
+        \\| Function | Returns | Description |
+        \\|---|---|---|
+        \\
     );
     for (functions) |f| {
         try w.print("| `{s}(", .{f.name});
