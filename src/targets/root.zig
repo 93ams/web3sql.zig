@@ -42,3 +42,37 @@ test "catalogue names are unique and prefixed" {
         for (functions[i + 1 ..]) |b| try std.testing.expect(!std.mem.eql(u8, a.name, b.name));
     }
 }
+
+test "REQ-DUCK-04 every catalogue function survives hostile arguments and tiny buffers" {
+    var prng = std.Random.DefaultPrng.init(0x7734);
+    const rand = prng.random();
+    var inputs: [8][512]u8 = undefined;
+    var dest: [4096]u8 = undefined;
+    var args: [8]catalog.Arg = undefined;
+    for (functions) |f| {
+        for (0..2_000) |_| {
+            for (f.args, 0..) |kind, i| {
+                if (kind == .int) {
+                    args[i] = .{ .int = @bitCast(rand.int(u64) >> rand.int(u6)) };
+                    continue;
+                }
+                const n = rand.uintAtMost(usize, inputs[i].len);
+                rand.bytes(inputs[i][0..n]);
+                if (kind == .text) for (inputs[i][0..n]) |*c| {
+                    c.* = "0123456789abcdefABCDEF,:_x{}<>[];"[c.* % 33];
+                };
+                args[i] = .{ .bytes = inputs[i][0..n] };
+            }
+            _ = f.call(args[0..f.args.len], dest[0..rand.uintAtMost(usize, 300)]) catch {};
+        }
+    }
+}
+
+test "row calls take no allocator; schema parsing fails cleanly with none available" {
+    // `Function.call` has no allocator parameter, so row paths cannot reach the heap through it.
+    var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 0 });
+    for (functions) |f| {
+        const p = f.prepared orelse continue;
+        try std.testing.expectError(error.Failed, p.prepare(failing.allocator(), "{a:u8}"));
+    }
+}

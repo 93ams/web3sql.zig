@@ -1,0 +1,10 @@
+web3sql_example:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      path: example.duckdb
+      config_options:
+        allow_unsigned_extensions: true
+      extensions:
+        - ../../zig-out/bin/web3.duckdb_extension

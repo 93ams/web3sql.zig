@@ -234,7 +234,7 @@ pub fn build(b: *std.Build) void {
     wasm_size.addArtifactArg(wasm_artifact);
     b.step("wasm-size", "Fail if web3_sql.wasm reaches 250 KB").dependOn(&wasm_size.step);
 
-    const sql_gen = b.addRunArtifact(b.addExecutable(.{
+    const sql_gen_exe = b.addExecutable(.{
         .name = "sql_gen",
         .root_module = b.createModule(.{
             .root_source_file = b.path("tools/sql_gen.zig"),
@@ -242,7 +242,14 @@ pub fn build(b: *std.Build) void {
             .optimize = .ReleaseSafe,
             .imports = &.{.{ .name = "web3sql", .module = mod }},
         }),
-    }));
+    });
+    const docs_gen = b.addRunArtifact(sql_gen_exe);
+    docs_gen.addArg("--docs");
+    const docs_out = b.addUpdateSourceFiles();
+    docs_out.addCopyFileToSource(docs_gen.addOutputFileArg("FUNCTIONS.md"), "docs/FUNCTIONS.md");
+    b.step("docs", "Regenerate docs/FUNCTIONS.md from the catalogue").dependOn(&docs_out.step);
+
+    const sql_gen = b.addRunArtifact(sql_gen_exe);
     sql_gen.addArtifactArg(wasm_artifact);
     const bigquery_sql = sql_gen.addOutputFileArg("bigquery_udfs.sql");
     const bigquery_js = sql_gen.addOutputFileArg("bigquery_web3.js");

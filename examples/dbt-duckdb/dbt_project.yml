@@ -1,0 +1,4 @@
+name: web3sql_example
+version: "0.1.0"
+profile: web3sql_example
+model-paths: ["models"]

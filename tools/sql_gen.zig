@@ -1,5 +1,6 @@
 //! Writes the warehouse deployment scripts for a built wasm bundle.
 //! Usage: sql_gen <web3_sql.wasm> <bigquery.sql> <bigquery_web3.js> <snowflake.sql>
+//!    or: sql_gen --docs <FUNCTIONS.md>
 const std = @import("std");
 const web3sql = @import("web3sql");
 
@@ -19,6 +20,13 @@ pub fn main(init: std.process.Init) !void {
     const gpa = init.arena.allocator();
     const io = init.io;
     const args = try init.minimal.args.toSlice(gpa);
+    if (args.len == 3 and std.mem.eql(u8, args[1], "--docs")) {
+        return writeTo(io, args[2], {}, struct {
+            fn f(w: *std.Io.Writer, _: void) std.Io.Writer.Error!void {
+                return sqlgen.writeFunctionDocs(w, web3sql.targets.functions);
+            }
+        }.f);
+    }
     if (args.len != 5) return error.InvalidArguments;
     const wasm = try std.Io.Dir.cwd().readFileAlloc(io, args[1], gpa, .limited(16 * 1024 * 1024));
     const b64 = try gpa.alloc(u8, std.base64.standard.Encoder.calcSize(wasm.len));

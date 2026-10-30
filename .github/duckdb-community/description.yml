@@ -1,0 +1,22 @@
+# Descriptor for duckdb/community-extensions (M8.5). Submit as extensions/web3/description.yml.
+extension:
+  name: web3
+  description: Blockchain decoding and high-precision DeFi math
+  version: 0.1.0
+  language: Zig
+  build: custom
+  license: UNSET
+  maintainers:
+    - 93ams
+
+repo:
+  github: 93ams/web3sql.zig
+  ref: UNSET
+
+docs:
+  hello_world: |
+    SELECT web3_hex_encode(web3_keccak256('Transfer(address,address,uint256)'::BLOB));
+  extended_description: |
+    Keccak and other hashes, Base58 and Bech32, EVM ABI, Solana Borsh and Anchor, Move BCS,
+    Bitcoin script, Cosmos Bech32 and IBC, Uniswap and other CLMM math, and Aave lending math.
+    Malformed rows return NULL.

@@ -130,6 +130,36 @@ pub fn writeSnowflake(w: *Writer, functions: []const catalog.Function, wasm_base
     }
 }
 
+fn typeName(kind: anytype) []const u8 {
+    return switch (@tagName(kind)[0]) {
+        'b' => if (@tagName(kind).len == 5) "BLOB" else "BOOLEAN",
+        't' => "VARCHAR",
+        else => "BIGINT",
+    };
+}
+
+/// docs/FUNCTIONS.md, so the reference cannot drift from the catalogue.
+pub fn writeFunctionDocs(w: *Writer, functions: []const catalog.Function) Writer.Error!void {
+    try w.writeAll(
+        \# SQL functions
+        \
+        \Generated from the function catalogue by `zig build docs`. Any malformed row returns `NULL`.
+        \Types are DuckDB's. Functions marked *DuckDB only* parse JSON, and are left out of the WASM bundle to fit its size budget.
+        \
+        \| Function | Returns | Description |
+        \|---|---|---|
+        \
+    );
+    for (functions) |f| {
+        try w.print("| `{s}(", .{f.name});
+        for (f.args, 0..) |a, i| {
+            if (i != 0) try w.writeAll(", ");
+            try w.writeAll(typeName(a));
+        }
+        try w.print(")` | {s} | {s}{s} |\n", .{ typeName(f.ret), f.doc, if (f.native_only) " *DuckDB only*" else "" });
+    }
+}
+
 const SAMPLE = [_]catalog.Function{
     catalog.func("web3_demo", "Demo", &.{ .bytes, .text, .int }, .bytes, struct {
         fn f(_: []const u8, _: []const u8, _: i64, dest: []u8) []const u8 {
@@ -142,6 +172,13 @@ const SAMPLE = [_]catalog.Function{
         }
     }.f),
 };
+
+test "function docs list every signature" {
+    var buf: [1024]u8 = undefined;
+    var w = Writer.fixed(&buf);
+    try writeFunctionDocs(&w, &SAMPLE);
+    try std.testing.expect(std.mem.indexOf(u8, w.buffered(), "| `web3_demo(BLOB, VARCHAR, BIGINT)` | BLOB | Demo |") != null);
+}
 
 test "REQ-WASM-03 BigQuery golden file" {
     var buf: [4096]u8 = undefined;

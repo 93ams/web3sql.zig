@@ -1,0 +1,26 @@
+name: release
+on:
+  push:
+    tags: ["v*"]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
+      - name: Cross-compile
+        run: |
+          mkdir release
+          for t in x86_64-linux-gnu:linux_amd64 aarch64-linux-gnu:linux_arm64 x86_64-macos:osx_amd64 aarch64-macos:osx_arm64 x86_64-windows-gnu:windows_amd64; do
+            target=${t%%:*}; platform=${t##*:}
+            zig build duckdb -Dtarget=$target -Doptimize=fast -p out/$platform
+            cp out/$platform/bin/web3.duckdb_extension release/web3.$platform.duckdb_extension
+          done
+          zig build wasm -Dchains=evm,svm -Dprotocols=clmm,tokens -p out/wasm
+          zig build wasm-size -Dchains=evm,svm -Dprotocols=clmm,tokens
+          cp out/wasm/bin/web3_sql.wasm dist/* release/
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: release/*

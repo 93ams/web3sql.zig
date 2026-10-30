@@ -1,27 +1,32 @@
-.PHONY: all test build run duckdb wasm package data bq-deploy clean
+.PHONY: all test build duckdb wasm docs bench data bq-deploy clean
+
+# Builds on a Windows-mounted filesystem hang unless the cache lives elsewhere.
+export ZIG_LOCAL_CACHE_DIR ?= $(HOME)/.cache/web3sql-zig/main
 
 all: build
 
 build:
 	zig build
 
-test:
+test: duckdb wasm
 	zig build test
+	zig build test -Dchains=none -Dprotocols=none
+	sh scripts/req_coverage.sh
 	python scripts/test_duckdb.py
-
-run:
-	zig build run
+	node scripts/test_wasm.mjs
 
 duckdb:
 	zig build duckdb
-	python scripts/package_duckdb.py
-	python scripts/test_duckdb.py
 
 wasm:
 	zig build wasm
+	zig build wasm-size
 
-package:
-	python scripts/package_duckdb.py
+docs:
+	zig build docs
+
+bench:
+	zig build bench
 
 data:
 	python scripts/fetch_test_data.py
@@ -30,4 +35,4 @@ bq-deploy:
 	python scripts/deploy_bq_test_data.py
 
 clean:
-	rm -rf zig-out .zig-cache
+	rm -rf zig-out .zig-cache dist
