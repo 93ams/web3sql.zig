@@ -1,7 +1,11 @@
-pub const duckdb_ext = @import("duckdb_ext/root.zig");
-pub const wasm_udf = @import("wasm_udf/root.zig");
+pub const catalog = @import("catalog.zig");
+pub const wasm_udf = @import("wasm_udf/bindings.zig");
+
+/// Every function enabled by the build flags.
+pub const functions = @import("functions_core.zig").entries;
 
 test {
-    _ = @import("duckdb_ext/root.zig");
-    _ = @import("wasm_udf/root.zig");
+    _ = @import("catalog.zig");
+    _ = @import("functions_core.zig");
+    _ = @import("wasm_udf/bindings.zig");
 }

@@ -44,9 +44,29 @@ fn anyEnabled(cfg: anytype) bool {
     return false;
 }
 
+/// Stable DuckDB C-API version; matches src/targets/duckdb_ext/vendor and API_VERSION in duckdb_main.zig.
+const DUCKDB_API_VERSION = "v1.5.6";
+const VERSION = "0.1.0";
+
+/// DuckDB's platform tag for a resolved target, e.g. linux_amd64.
+fn duckdbPlatform(b: *std.Build, t: std.Target) []const u8 {
+    const os = switch (t.os.tag) {
+        .macos => "osx",
+        .windows => "windows",
+        else => "linux",
+    };
+    const arch = switch (t.cpu.arch) {
+        .aarch64 => "arm64",
+        else => "amd64",
+    };
+    return b.fmt("{s}_{s}", .{ os, arch });
+}
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const duckdb_platform = b.option([]const u8, "duckdb_platform", "DuckDB platform tag for the extension footer [default: from target]") orelse
+        duckdbPlatform(b, target.result);
 
     // Compile-time feature flags
     const chains_cfg = parseFeatures(b, ChainsConfig, "chains", "Comma-delimited chains (evm,svm,move,utxo,cosmos), 'all' or 'none' [default: all]");
@@ -137,28 +157,49 @@ pub fn build(b: *std.Build) void {
     bench_step.dependOn(&b.addRunArtifact(bench_exe).step);
 
     // DuckDB Extension Target
+    const duckdb_header = b.addTranslateC(.{
+        .root_source_file = b.path("src/targets/duckdb_ext/vendor/duckdb_extension.h"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
     const duckdb_lib = b.addLibrary(.{
         .linkage = .dynamic,
-        .name = "web3.duckdb_extension",
+        .name = "web3",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/duckdb_main.zig"),
             .target = target,
-            .optimize = optimize,
+            .optimize = if (optimize == .debug) .ReleaseFast else optimize,
+            .strip = true,
             .imports = &.{
                 .{ .name = "web3sql", .module = mod },
-                .{ .name = "build_options", .module = options_mod },
+                .{ .name = "duckdb_c", .module = duckdb_header.createModule() },
             },
         }),
     });
     duckdb_lib.rdynamic = true;
-    const duckdb_step = b.step("duckdb", "Build DuckDB C-API extension dynamic library");
-    const install_duckdb = b.addInstallArtifact(duckdb_lib, .{});
-    duckdb_step.dependOn(&install_duckdb.step);
 
-    // WebAssembly UDF Target (wasm32-freestanding)
+    const packager = b.addExecutable(.{
+        .name = "duckdb_package",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/duckdb_package.zig"),
+            .target = b.graph.host,
+            .optimize = .ReleaseSafe,
+        }),
+    });
+    const package = b.addRunArtifact(packager);
+    package.addArtifactArg(duckdb_lib);
+    const packaged = package.addOutputFileArg("web3.duckdb_extension");
+    package.addArgs(&.{ duckdb_platform, DUCKDB_API_VERSION, VERSION });
+    const duckdb_step = b.step("duckdb", "Build and package web3.duckdb_extension (-Dduckdb_platform=...)");
+    duckdb_step.dependOn(&b.addInstallBinFile(packaged, "web3.duckdb_extension").step);
+
+    // WebAssembly UDF Target (wasm32-freestanding, SIMD128). A separate library module because
+    // `mod` is compiled for the host.
     const wasm_target = b.resolveTargetQuery(.{
         .cpu_arch = .wasm32,
         .os_tag = .freestanding,
+        .cpu_features_add = std.Target.wasm.featureSet(&.{.simd128}),
     });
     const wasm_artifact = b.addExecutable(.{
         .name = "web3_sql",
@@ -166,16 +207,52 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/wasm_main.zig"),
             .target = wasm_target,
             .optimize = .ReleaseSmall,
-            .imports = &.{
-                .{ .name = "web3sql", .module = mod },
-                .{ .name = "build_options", .module = options_mod },
-            },
+            .strip = true,
+            .imports = &.{.{
+                .name = "web3sql",
+                .module = b.createModule(.{
+                    .root_source_file = b.path("src/root.zig"),
+                    .target = wasm_target,
+                    .optimize = .ReleaseSmall,
+                    .imports = &.{.{ .name = "build_options", .module = options_mod }},
+                }),
+            }},
         }),
     });
     wasm_artifact.entry = .disabled;
     wasm_artifact.rdynamic = true;
+    wasm_artifact.stack_size = 256 * 1024;
 
-    const wasm_step = b.step("wasm", "Build freestanding WebAssembly UDF bundle (web3_sql.wasm)");
-    const install_wasm = b.addInstallArtifact(wasm_artifact, .{});
-    wasm_step.dependOn(&install_wasm.step);
+    const wasm_size = b.addRunArtifact(b.addExecutable(.{
+        .name = "wasm_size",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/wasm_size.zig"),
+            .target = b.graph.host,
+            .optimize = .ReleaseSafe,
+        }),
+    }));
+    wasm_size.addArtifactArg(wasm_artifact);
+    b.step("wasm-size", "Fail if web3_sql.wasm reaches 250 KB").dependOn(&wasm_size.step);
+
+    const sql_gen = b.addRunArtifact(b.addExecutable(.{
+        .name = "sql_gen",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/sql_gen.zig"),
+            .target = b.graph.host,
+            .optimize = .ReleaseSafe,
+            .imports = &.{.{ .name = "web3sql", .module = mod }},
+        }),
+    }));
+    sql_gen.addArtifactArg(wasm_artifact);
+    const bigquery_sql = sql_gen.addOutputFileArg("bigquery_udfs.sql");
+    const bigquery_js = sql_gen.addOutputFileArg("bigquery_web3.js");
+    const snowflake_sql = sql_gen.addOutputFileArg("snowflake_udfs.sql");
+    const dist = b.addUpdateSourceFiles();
+    dist.addCopyFileToSource(bigquery_sql, "dist/bigquery_udfs.sql");
+    dist.addCopyFileToSource(bigquery_js, "dist/bigquery_web3.js");
+    dist.addCopyFileToSource(snowflake_sql, "dist/snowflake_udfs.sql");
+
+    const wasm_step = b.step("wasm", "Build web3_sql.wasm and dist/ warehouse deployment scripts");
+    wasm_step.dependOn(&b.addInstallArtifact(wasm_artifact, .{}).step);
+    wasm_step.dependOn(&dist.step);
 }
