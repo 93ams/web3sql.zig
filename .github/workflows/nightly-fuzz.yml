@@ -1,0 +1,20 @@
+name: nightly-fuzz
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+jobs:
+  fuzz:
+    strategy:
+      fail-fast: false
+      matrix:
+        lane: ["-Dchains=evm -Dprotocols=none", "-Dchains=svm -Dprotocols=none", "-Dchains=move -Dprotocols=none", "-Dchains=utxo,cosmos -Dprotocols=none", "-Dchains=none -Dprotocols=all"]
+    runs-on: ubuntu-latest
+    timeout-minutes: 70
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
+      # An hour of fuzzing; `timeout` exit 124 is the expected way to finish.
+      - run: timeout 3600 zig build test ${{ matrix.lane }} -Doptimize=safe --fuzz=100G || [ $? -eq 124 ]

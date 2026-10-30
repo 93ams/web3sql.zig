@@ -1,4 +1,4 @@
-// Runs the generated BigQuery library exactly as a warehouse would: as plain script text in a fresh
+// REQ-WASM-01 / REQ-WASM-03: runs the generated BigQuery library exactly as a warehouse would: as plain script text in a fresh
 // context, with the host's type mapping. Usage: node scripts/test_wasm.mjs [dist/bigquery_web3.js]
 import { readFileSync } from "node:fs";
 import vm from "node:vm";

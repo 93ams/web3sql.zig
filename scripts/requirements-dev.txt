@@ -1,0 +1,10 @@
+duckdb
+pyarrow
+pytz
+eth-abi
+eth-utils
+pycryptodome
+blake3
+base58
+bech32
+solders

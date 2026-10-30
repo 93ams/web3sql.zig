@@ -11,10 +11,11 @@ pub const Base58Error = error{
 
 pub const ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 
-/// Largest binary input to encode; covers every on-chain address, pubkey and signature form.
-pub const MAX_DECODED_LEN: usize = 128;
+/// Largest binary input to encode. Solana stores instruction data as Base58, and a transaction is
+/// at most 1232 bytes, so anything smaller turns real rows into NULLs.
+pub const MAX_DECODED_LEN: usize = 1280;
 /// Base58 length of MAX_DECODED_LEN bytes of 0xFF, and the largest accepted text input.
-pub const MAX_ENCODED_LEN: usize = 176;
+pub const MAX_ENCODED_LEN: usize = 1750;
 
 // 58^5 fits in 30 bits, so limb arithmetic stays in u64 where division by a constant is a
 // multiply. The roadmap's 58^10 limbs would need u128 division, which is a libcall.
@@ -158,7 +159,6 @@ test "REQ-CORE-02 base58 Bitcoin Core vectors" {
     var out: [MAX_DECODED_LEN]u8 = undefined;
     const hex = @import("hex.zig");
     for (vectors.cases) |c| {
-        if (c.hex.len / 2 > MAX_DECODED_LEN) continue; // Core's long-input cases exceed the documented bound
         const raw = try hex.decodeHex(c.hex, &bin);
         try std.testing.expectEqualStrings(c.b58, try encodeBase58(raw, &txt));
         try std.testing.expectEqualSlices(u8, raw, try decodeBase58(c.b58, &out));
@@ -181,7 +181,7 @@ test "REQ-CORE-02 base58 bounds and malformed input" {
     try std.testing.expectError(Base58Error.InputTooLarge, encodeBase58(&too_long, &txt));
     const long_txt: [MAX_ENCODED_LEN + 1]u8 = @splat('z');
     try std.testing.expectError(Base58Error.InputTooLarge, decodeBase58(&long_txt, &out));
-    // 176 'z' overflows MAX_DECODED_LEN but must only ever yield BufferTooSmall.
+    // a text of all 'z' overflows MAX_DECODED_LEN but must only ever yield BufferTooSmall.
     try std.testing.expectError(Base58Error.BufferTooSmall, decodeBase58(long_txt[1..], &out));
 }
 

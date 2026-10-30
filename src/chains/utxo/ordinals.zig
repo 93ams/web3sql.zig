@@ -27,8 +27,7 @@ pub const Inscription = struct {
         const ins = (it.next() catch return OrdError.TruncatedScript) orelse return null;
         self.body_script = it.rest;
         if (ins.opcode == script.OP_ENDIF) return null;
-        if (!ins.isPush()) return OrdError.InvalidEnvelope;
-        return ins.data;
+        return pushValue(&ins) orelse OrdError.InvalidEnvelope;
     }
 
     /// Concatenates the body pushes into `dest`.
@@ -58,16 +57,26 @@ pub fn find(witness_script: []const u8) OrdError!?Inscription {
     return null;
 }
 
+const PUSHNUM_VALUES = [_]u8{ 0x81, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 };
+
+/// Data of a push. As in ord's envelope.rs, OP_1NEGATE and OP_1..OP_16 count as one-byte pushes;
+/// many real inscriptions write their tags that way.
+fn pushValue(ins: *const script.Instruction) ?[]const u8 {
+    if (ins.isPush()) return ins.data;
+    if (ins.opcode < 0x4f or ins.opcode > 0x60 or ins.opcode == 0x50) return null;
+    return PUSHNUM_VALUES[ins.opcode - 0x4f ..][0..1];
+}
+
 fn parseFields(it: *script.Iterator) OrdError!Inscription {
     var ct: ?[]const u8 = null;
     while (true) {
         const tag = (it.next() catch return OrdError.TruncatedScript) orelse return .{ .content_type = ct, .body_script = &.{} };
         if (tag.opcode == script.OP_ENDIF) return .{ .content_type = ct, .body_script = &.{} };
         if (tag.opcode == script.OP_0) return .{ .content_type = ct, .body_script = it.rest };
-        if (!tag.isPush()) return OrdError.InvalidEnvelope;
+        const tag_bytes = pushValue(&tag) orelse return OrdError.InvalidEnvelope;
         const val = (it.next() catch return OrdError.TruncatedScript) orelse return OrdError.InvalidEnvelope;
-        if (!val.isPush()) return OrdError.InvalidEnvelope;
-        if (ct == null and tag.data.len == 1 and tag.data[0] == 1) ct = val.data;
+        const val_bytes = pushValue(&val) orelse return OrdError.InvalidEnvelope;
+        if (ct == null and tag_bytes.len == 1 and tag_bytes[0] == 1) ct = val_bytes;
     }
 }
 
@@ -96,6 +105,14 @@ fn emit(w: *std.Io.Writer, witness_script: []const u8) (OrdError || std.Io.Write
         for (c) |b| try w.print("{x:0>2}", .{b});
     }
     try w.writeAll("\"}");
+}
+
+test "REQ-UTXO-02 ordinals tag written as OP_1, per ord envelope.rs" {
+    const s = [_]u8{ 0x00, 0x63, 0x03, 'o', 'r', 'd', 0x51, 0x0a } ++ "text/plain".* ++ [_]u8{ 0x00, 0x02, 'h', 'i', 0x68 };
+    var ins = (try find(&s)).?;
+    try std.testing.expectEqualStrings("text/plain", ins.content_type.?);
+    var buf: [8]u8 = undefined;
+    try std.testing.expectEqualStrings("hi", try ins.readBody(&buf));
 }
 
 test "REQ-UTXO-02 ordinals envelope content type and multi-push body" {

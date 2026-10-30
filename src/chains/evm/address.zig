@@ -1,6 +1,8 @@
 const std = @import("std");
 const keccak = @import("../../core/crypto/keccak.zig");
 const hex = @import("../../core/encodings/hex.zig");
+const core_fuzz = @import("../../core/fuzz.zig");
+const vectors = @import("abi_vectors.zig");
 
 pub const Address = [20]u8;
 
@@ -11,12 +13,15 @@ pub const AddressError = error{
     BufferTooSmall,
 };
 
-/// Validates or formats an address with EIP-55 mixed-case checksum.
+/// Formats an address with its EIP-55 mixed-case checksum.
 pub fn toChecksumAddress(addr: *const Address, dest: *[42]u8) void {
     dest[0] = '0';
     dest[1] = 'x';
     var hex_raw: [40]u8 = undefined;
-    _ = hex.encodeHex(addr, &hex_raw) catch unreachable;
+    for (addr, 0..) |b, i| {
+        hex_raw[i * 2] = hex.HEX_LOWER[b >> 4];
+        hex_raw[i * 2 + 1] = hex.HEX_LOWER[b & 0x0F];
+    }
 
     var hash_buf: [32]u8 = undefined;
     keccak.hash(&hex_raw, &hash_buf);
@@ -35,6 +40,23 @@ pub fn toChecksumAddress(addr: *const Address, dest: *[42]u8) void {
             dest[2 + i] = c;
         }
     }
+}
+
+/// Row shape of `toChecksumAddress`: 20 raw bytes in, 42 checksummed characters out.
+pub fn checksumAddress(raw: []const u8, dest: []u8) AddressError![]const u8 {
+    if (raw.len != 20) return AddressError.InvalidLength;
+    if (dest.len < 42) return AddressError.BufferTooSmall;
+    toChecksumAddress(raw[0..20], dest[0..42]);
+    return dest[0..42];
+}
+
+/// Parses 40 hex characters, with or without 0x, ignoring letter case. Use `validateChecksumAddress` to enforce EIP-55.
+pub fn parseAddress(s: []const u8) AddressError!Address {
+    const has_prefix = s.len >= 2 and s[0] == '0' and (s[1] == 'x' or s[1] == 'X');
+    if (s.len != @as(usize, if (has_prefix) 42 else 40)) return AddressError.InvalidLength;
+    var addr: Address = undefined;
+    _ = hex.decodeHex(s, &addr) catch return AddressError.InvalidHex;
+    return addr;
 }
 
 /// Derives a CREATE address: keccak256(rlp([sender, nonce]))[12..].
@@ -127,6 +149,78 @@ test "REQ-EVM-01 validate checksum" {
     _ = try validateChecksumAddress("0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaed");
     try std.testing.expectError(AddressError.ChecksumFailed, validateChecksumAddress("0x5AAeb6053F3E94C9b9A09f33669435E7Ef1BeAed"));
     try std.testing.expectError(AddressError.InvalidLength, validateChecksumAddress("0x1234"));
+}
+
+// Source: EIP-55, "Test Cases" (all caps, all lower, normal). EIP-1014 examples 0..6 for CREATE2.
+test "REQ-EVM-01 EIP-55 vectors round-trip" {
+    const cases = [_][]const u8{
+        "0x52908400098527886E0F7030069857D2E4169EE7", "0x8617E340B3D01FA5F11F306F4090FD50E238070D",
+        "0xde709f2102306220921060314715629080e2fb77", "0x27b1fdb04752bbc536007a920d24acb045561c26",
+        "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed", "0xfB6916095ca1df60bB79Ce92cE3Ea74c37c5d359",
+        "0xdbF03B407c01E7cD3CBea99509d93f8DDDC8C6FB", "0xD1220A0cf47c7B9Be7A2E6BA89F429762e7b9aDb",
+    };
+    for (cases) |c| {
+        const addr = try validateChecksumAddress(c);
+        var out: [42]u8 = undefined;
+        try std.testing.expectEqualStrings(c, try checksumAddress(&addr, &out));
+    }
+}
+
+test "REQ-EVM-01 parseAddress ignores checksum, rejects bad shapes" {
+    const want = parseAddr("5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed");
+    try std.testing.expectEqual(want, try parseAddress("0x5AAeb6053F3E94C9b9A09f33669435E7Ef1BeAed"));
+    try std.testing.expectEqual(want, try parseAddress("5aaeb6053f3e94c9b9a09f33669435e7ef1beaed"));
+    try std.testing.expectError(AddressError.InvalidLength, parseAddress("0x5aAe"));
+    try std.testing.expectError(AddressError.InvalidLength, parseAddress(""));
+    try std.testing.expectError(AddressError.InvalidHex, parseAddress("0xzzAeb6053F3E94C9b9A09f33669435E7Ef1BeAed"));
+    var out: [41]u8 = undefined;
+    try std.testing.expectError(AddressError.BufferTooSmall, checksumAddress(&want, &out));
+    try std.testing.expectError(AddressError.InvalidLength, checksumAddress("short", &out));
+}
+
+test "REQ-EVM-01 CREATE at RLP nonce boundaries" {
+    const sender = parseAddr(vectors.create_sender);
+    for (vectors.creates) |c| try std.testing.expectEqual(parseAddr(c.address), deriveCreateAddress(&sender, c.nonce));
+}
+
+test "REQ-EVM-01 CREATE2 remaining EIP-1014 examples" {
+    const Case = struct { sender: []const u8, salt: []const u8, code: []const u8, want: []const u8 };
+    const cases = [_]Case{
+        .{ .sender = "deadbeef00000000000000000000000000000000", .salt = "000000000000000000000000feed000000000000000000000000000000000000", .code = "00", .want = "D04116cDd17beBE565EB2422F2497E06cC1C9833" },
+        .{ .sender = "0000000000000000000000000000000000000000", .salt = "0000000000000000000000000000000000000000000000000000000000000000", .code = "deadbeef", .want = "70f2b2914A2a4b783FaEFb75f459A580616Fcb5e" },
+        .{ .sender = "00000000000000000000000000000000deadbeef", .salt = "00000000000000000000000000000000000000000000000000000000cafebabe", .code = "deadbeef", .want = "60f3f640a8508fC6a86d45DF051962668E1e8AC7" },
+        .{ .sender = "00000000000000000000000000000000deadbeef", .salt = "00000000000000000000000000000000000000000000000000000000cafebabe", .code = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef", .want = "1d8bfDC5D46DC4f61D6b6115972536eBE6A8854C" },
+        .{ .sender = "0000000000000000000000000000000000000000", .salt = "0000000000000000000000000000000000000000000000000000000000000000", .code = "", .want = "E33C0C7F7df4809055C3ebA6c09CFe4BaF1BD9e0" },
+    };
+    for (cases) |c| {
+        const sender = parseAddr(c.sender);
+        var salt: [32]u8 = undefined;
+        _ = try hex.decodeHex(c.salt, &salt);
+        var code: [64]u8 = undefined;
+        var code_hash: [32]u8 = undefined;
+        keccak.hash(try hex.decodeHex(c.code, &code), &code_hash);
+        try std.testing.expectEqual(parseAddr(c.want), deriveCreate2Address(&sender, &salt, &code_hash));
+    }
+}
+
+fn parseAll(_: void, bytes: []const u8) void {
+    _ = parseAddress(bytes) catch {};
+    _ = validateChecksumAddress(bytes) catch {};
+    var out: [42]u8 = undefined;
+    _ = checksumAddress(bytes, &out) catch {};
+}
+
+test "REQ-EVM-01 address parser stress" {
+    core_fuzz.stress(200_000, &.{ "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed", "5aaeb6053f3e94c9b9a09f33669435e7ef1beaed", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13" }, {}, parseAll);
+}
+
+test "REQ-EVM-01 address parser fuzz" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            var buf: [64]u8 = undefined;
+            parseAll({}, buf[0..smith.slice(&buf)]);
+        }
+    }.f, .{});
 }
 
 test "eip55 checksum" {

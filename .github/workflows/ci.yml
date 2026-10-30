@@ -6,13 +6,58 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        flags: ["", "-Dchains=none -Dprotocols=none", "-Dchains=evm -Dprotocols=tokens", "-Dchains=svm,move"]
+        flags:
+          - ""
+          - "-Dchains=none -Dprotocols=none"
+          - "-Dchains=evm -Dprotocols=tokens"
+          - "-Dchains=svm -Dprotocols=none"
+          - "-Dchains=move -Dprotocols=none"
+          - "-Dchains=utxo -Dprotocols=none"
+          - "-Dchains=cosmos -Dprotocols=none"
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.17.0
-      - run: zig fmt --check src build.zig
+      - run: zig fmt --check src bench tools build.zig
       - run: zig build test ${{ matrix.flags }}
-      - run: zig build wasm -Dchains=evm,svm
+      - run: zig build duckdb ${{ matrix.flags }}
+      - run: sh scripts/req_coverage.sh
+        if: matrix.flags == '' && runner.os != 'Windows'
+
+  wasm:
+    strategy:
+      fail-fast: false
+      matrix:
+        flags: ["", "-Dchains=evm -Dprotocols=tokens", "-Dchains=svm -Dprotocols=none", "-Dchains=none -Dprotocols=none"]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+      - run: zig build wasm ${{ matrix.flags }}
+      - run: zig build wasm-size ${{ matrix.flags }}
+      - run: node scripts/test_wasm.mjs
+
+  integration:
+    strategy:
+      fail-fast: false
+      matrix:
+        duckdb: ["duckdb==2.0.*", "duckdb==1.5.*"]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install -r scripts/requirements-dev.txt "${{ matrix.duckdb }}"
+      - run: zig build duckdb
+      - run: python scripts/test_duckdb.py

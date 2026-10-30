@@ -10,7 +10,8 @@ const Function = catalog.Function;
 const API_VERSION = "v1.5.6";
 const ROW_OUTPUT_LIMIT = 64 * 1024;
 
-var api: *const c.duckdb_ext_api_v1 = undefined;
+/// A copy, as in DUCKDB_EXTENSION_API_INIT: `get_api` returns memory that only lives during init.
+var api: c.duckdb_ext_api_v1 = undefined;
 
 /// Parsed schema shared by copies of DuckDB's bind data, freed when the last copy goes.
 const BindState = struct {
@@ -184,14 +185,14 @@ fn register(conn: c.duckdb_connection, function: *const Function) bool {
 /// DUCKDB_EXTENSION_ENTRYPOINT expanded: `web3_init_c_api`, resolved by name from the extension file.
 export fn web3_init_c_api(info: c.duckdb_extension_info, access: *c.struct_duckdb_extension_access) callconv(.c) bool {
     const raw = access.get_api.?(info, API_VERSION) orelse return false; // DuckDB sets the error
-    api = @ptrCast(@alignCast(raw));
+    api = @as(*const c.duckdb_ext_api_v1, @ptrCast(@alignCast(raw))).*;
     var conn: c.duckdb_connection = null;
     if (api.duckdb_connect.?(access.get_database.?(info).*, &conn) != c.DuckDBSuccess) {
         access.set_error.?(info, "web3: could not open a connection");
         return false;
     }
     defer api.duckdb_disconnect.?(&conn);
-    for (&web3sql.targets.functions) |*function| {
+    for (web3sql.targets.functions) |*function| {
         if (!register(conn, function)) {
             access.set_error.?(info, "web3: function registration failed");
             return false;
