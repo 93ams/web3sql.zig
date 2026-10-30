@@ -1,0 +1,12 @@
+.zig-cache/
+zig-out/
+*.o
+*.obj
+*.pdb
+*.dll
+*.so
+*.dylib
+*.wasm
+
+dist/
+.venv/
