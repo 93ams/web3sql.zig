@@ -1,0 +1,172 @@
+{
+ "address": "CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK",
+ "metadata": {
+  "name": "amm_v3",
+  "version": "0.1.0",
+  "spec": "0.1.0",
+  "description": "Anchor client and source for Raydium concentrated liquidity AMM"
+ },
+ "instructions": [
+  {
+   "name": "swap",
+   "docs": [
+    "#[deprecated(note = \"Use `swap_v2` instead.\")]",
+    "Swaps one token for as much as possible of another token across a single pool",
+    "",
+    "# Arguments",
+    "",
+    "* `ctx` - The context of accounts",
+    "* `amount` - Arranged in pairs with other_amount_threshold. (amount_in, amount_out_minimum) or (amount_out, amount_in_maximum)",
+    "* `other_amount_threshold` - For slippage check",
+    "* `sqrt_price_limit` - The Q64.64 sqrt price \u221aP limit. If zero for one, the price cannot",
+    "* `is_base_input` - swap base input or swap base output",
+    ""
+   ],
+   "discriminator": [
+    248,
+    198,
+    158,
+    145,
+    225,
+    117,
+    135,
+    200
+   ],
+   "accounts": [],
+   "args": [
+    {
+     "name": "amount",
+     "type": "u64"
+    },
+    {
+     "name": "other_amount_threshold",
+     "type": "u64"
+    },
+    {
+     "name": "sqrt_price_limit_x64",
+     "type": "u128"
+    },
+    {
+     "name": "is_base_input",
+     "type": "bool"
+    }
+   ]
+  }
+ ],
+ "accounts": [],
+ "events": [
+  {
+   "name": "SwapEvent",
+   "discriminator": [
+    64,
+    198,
+    205,
+    232,
+    38,
+    8,
+    113,
+    226
+   ]
+  }
+ ],
+ "errors": [],
+ "types": [
+  {
+   "name": "SwapEvent",
+   "docs": [
+    "Emitted by when a swap is performed for a pool"
+   ],
+   "type": {
+    "kind": "struct",
+    "fields": [
+     {
+      "name": "pool_state",
+      "docs": [
+       "The pool for which token_0 and token_1 were swapped"
+      ],
+      "type": "pubkey"
+     },
+     {
+      "name": "sender",
+      "docs": [
+       "The address that initiated the swap call, and that received the callback"
+      ],
+      "type": "pubkey"
+     },
+     {
+      "name": "token_account_0",
+      "docs": [
+       "The payer token account in zero for one swaps, or the recipient token account",
+       "in one for zero swaps"
+      ],
+      "type": "pubkey"
+     },
+     {
+      "name": "token_account_1",
+      "docs": [
+       "The payer token account in one for zero swaps, or the recipient token account",
+       "in zero for one swaps"
+      ],
+      "type": "pubkey"
+     },
+     {
+      "name": "amount_0",
+      "docs": [
+       "The real delta amount of the token_0 of the pool or user"
+      ],
+      "type": "u64"
+     },
+     {
+      "name": "transfer_fee_0",
+      "docs": [
+       "The transfer fee charged by the withheld_amount of the token_0"
+      ],
+      "type": "u64"
+     },
+     {
+      "name": "amount_1",
+      "docs": [
+       "The real delta of the token_1 of the pool or user"
+      ],
+      "type": "u64"
+     },
+     {
+      "name": "transfer_fee_1",
+      "docs": [
+       "The transfer fee charged by the withheld_amount of the token_1"
+      ],
+      "type": "u64"
+     },
+     {
+      "name": "zero_for_one",
+      "docs": [
+       "if true, amount_0 is negtive and amount_1 is positive"
+      ],
+      "type": "bool"
+     },
+     {
+      "name": "sqrt_price_x64",
+      "docs": [
+       "The sqrt(price) of the pool after the swap, as a Q64.64"
+      ],
+      "type": "u128"
+     },
+     {
+      "name": "liquidity",
+      "docs": [
+       "The liquidity of the pool after the swap"
+      ],
+      "type": "u128"
+     },
+     {
+      "name": "tick",
+      "docs": [
+       "The log base 1.0001 of price of the pool after the swap"
+      ],
+      "type": "i32"
+     }
+    ]
+   }
+  }
+ ]
+}
