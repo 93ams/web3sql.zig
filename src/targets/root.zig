@@ -6,6 +6,7 @@ pub const wasm_udf = @import("wasm_udf/bindings.zig");
 
 const sections = [_]struct { enabled: bool, path: type }{
     .{ .enabled = true, .path = @import("functions_core.zig") },
+    .{ .enabled = build_options.chain_evm, .path = if (build_options.chain_evm) @import("functions_evm.zig") else void },
     .{ .enabled = build_options.chain_svm, .path = if (build_options.chain_svm) @import("functions_svm.zig") else void },
     .{ .enabled = build_options.chain_move, .path = if (build_options.chain_move) @import("functions_move.zig") else void },
     .{ .enabled = build_options.chain_utxo, .path = if (build_options.chain_utxo) @import("functions_utxo.zig") else void },

@@ -26,6 +26,19 @@ Types are DuckDB's. Functions marked *DuckDB only* parse JSON, and are left out 
 | `web3_i256_from_bytes(BLOB)` | VARCHAR | Signed decimal from 32 big-endian bytes |
 | `web3_u256_to_bytes(VARCHAR)` | BLOB | 32 big-endian bytes from decimal |
 | `web3_mul_div(VARCHAR, VARCHAR, VARCHAR)` | VARCHAR | floor(a*b/c) on decimal strings at 512-bit precision |
+| `web3_evm_checksum_address(BLOB)` | VARCHAR | EIP-55 text of a 20-byte address |
+| `web3_evm_is_checksummed(VARCHAR)` | BOOLEAN | True if text passes EIP-55 |
+| `web3_evm_create_address(BLOB, BIGINT)` | BLOB | CREATE address (sender, nonce) |
+| `web3_evm_create2_address(BLOB, BLOB, BLOB)` | BLOB | CREATE2 address (sender, salt, init code hash) |
+| `web3_evm_topic0(VARCHAR)` | BLOB | Event topic0 of a human-readable signature |
+| `web3_evm_selector(VARCHAR)` | BLOB | 4-byte selector of a human-readable signature |
+| `web3_evm_canonical_signature(VARCHAR)` | VARCHAR | Canonical form of a human-readable signature |
+| `web3_evm_decode_log(VARCHAR, BLOB, BLOB)` | VARCHAR | JSON from (signature, topics, data) |
+| `web3_evm_decode_log_field(VARCHAR, BLOB, BLOB, VARCHAR)` | VARCHAR | One JSON value from (signature, topics, data, path) |
+| `web3_evm_decode_calldata(VARCHAR, BLOB)` | VARCHAR | JSON from (signature, input) |
+| `web3_evm_decode_calldata_field(VARCHAR, BLOB, VARCHAR)` | VARCHAR | One JSON value from (signature, input, path) |
+| `web3_evm_decode_log_abi(VARCHAR, BLOB, BLOB)` | VARCHAR | JSON from (JSON ABI fragment, topics, data) *DuckDB only* |
+| `web3_evm_decode_calldata_abi(VARCHAR, BLOB)` | VARCHAR | JSON from (JSON ABI fragment, input) *DuckDB only* |
 | `web3_sol_is_on_curve(BLOB)` | BOOLEAN | True if 32 bytes are an Ed25519 point |
 | `web3_sol_pda(VARCHAR, VARCHAR)` | VARCHAR | Program derived address from Base58 program id and comma-separated hex seeds |
 | `web3_sol_pda_bump(VARCHAR, VARCHAR)` | BIGINT | Bump seed of web3_sol_pda |

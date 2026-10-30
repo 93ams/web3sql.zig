@@ -28,6 +28,9 @@ const Bench = struct {
 };
 
 var sink: u8 = 0;
+var swap: if (@hasDecl(web3sql.chains.evm, "abi")) web3sql.chains.evm.abi.Fragment else void = undefined;
+var swap_topics: [3][32]u8 = undefined;
+var swap_data: [160]u8 = undefined;
 var input_4k: [4096]u8 = undefined;
 var hex_4k: [8192]u8 = undefined;
 var b64_4k: [5464]u8 = undefined;
@@ -43,6 +46,24 @@ pub fn main(init: std.process.Init) !void {
     _ = try core.encodings.hex.encodeHex(&input_4k, &hex_4k);
     _ = try core.encodings.base64.encodeBase64(&input_4k, &b64_4k);
 
+    if (@hasDecl(web3sql.chains.evm, "decoder")) {
+        var arena: [8192]u8 = undefined;
+        var fba = std.heap.FixedBufferAllocator.init(&arena);
+        swap = try web3sql.chains.evm.abi.parseSignature(fba.allocator(), "event Swap(address indexed sender, address indexed recipient, int256 amount0, int256 amount1, uint160 sqrtPriceX96, uint128 liquidity, int24 tick)");
+        swap_topics[0] = swap.topic0();
+        for (swap_topics[1..]) |*t| t.* = @splat(0);
+        @memset(&swap_data, 0);
+        std.mem.writeInt(u256, swap_data[0..32], 1_000_000, .big);
+        std.mem.writeInt(i256, swap_data[32..64], -2_000_000, .big);
+        std.mem.writeInt(u256, swap_data[64..96], 1 << 96, .big);
+        std.mem.writeInt(u256, swap_data[96..128], 1 << 80, .big);
+        b.run("uniswap swap log to json", 0, {}, struct {
+            fn f(_: void) void {
+                var out: [1024]u8 = undefined;
+                consume(web3sql.chains.evm.decoder.renderLogJson(&swap, &swap_topics, &swap_data, &out) catch unreachable);
+            }
+        }.f);
+    }
     b.run("keccak256 32B", 32, {}, struct {
         fn f(_: void) void {
             var d: [32]u8 = undefined;

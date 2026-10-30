@@ -103,6 +103,55 @@ def check_math():
         eq(q("web3_i256_from_bytes", (s % 2**256).to_bytes(32, "big")), str(s), "i256")
 
 
+def check_evm():
+    import rlp
+    from eth_abi import encode
+    from eth_utils import to_checksum_address
+
+    rng = random.Random(7)
+    for _ in range(50):
+        addr = rng.randbytes(20)
+        text = to_checksum_address(addr)
+        eq(q("web3_evm_checksum_address", addr), text, "eip55")
+        eq(q("web3_evm_is_checksummed", text), True, "eip55 valid")
+        nonce = rng.choice([0, 1, 127, 128, 255, 256, rng.getrandbits(40)])
+        eq(bytes(q("web3_evm_create_address", addr, nonce)), keccak256(rlp.encode([addr, nonce]))[12:], "create")
+        salt, code = rng.randbytes(32), rng.randbytes(32)
+        eq(bytes(q("web3_evm_create2_address", addr, salt, code)), keccak256(b"\xff" + addr + salt + code)[12:], "create2")
+    eq(q("web3_evm_create_address", b"\x01", 0), None, "short sender is NULL")
+
+    sig = "Swap(address indexed sender, address indexed recipient, int256 amount0, int256 amount1, uint160 sqrtPriceX96, uint128 liquidity, int24 tick)"
+    canon = "Swap(address,address,int256,int256,uint160,uint128,int24)"
+    eq(q("web3_evm_canonical_signature", "event " + sig), canon, "canonical")
+    eq(bytes(q("web3_evm_topic0", "event " + sig)), keccak256(canon.encode()), "topic0")
+    eq(bytes(q("web3_evm_selector", "function transfer(address to, uint256 amount)")), keccak256(b"transfer(address,uint256)")[:4], "selector")
+    a, b = rng.randbytes(20), rng.randbytes(20)
+    topics = keccak256(canon.encode()) + a.rjust(32, b"\0") + b.rjust(32, b"\0")
+    values = [-5, 10**30, 2**150, 2**100, -7]
+    data = encode(["int256", "int256", "uint160", "uint128", "int24"], values)
+    got = json.loads(q("web3_evm_decode_log", "event " + sig, topics, data))
+    eq(got["sender"], "0x" + a.hex(), "log sender")
+    eq([int(got[k]) for k in ("amount0", "amount1", "sqrtPriceX96", "liquidity", "tick")], values, "log values")
+    eq(str(json.loads(q("web3_evm_decode_log_field", "event " + sig, topics, data, "amount1"))), str(10**30), "log field")
+
+    frag = json.dumps({"type": "event", "name": "Swap", "anonymous": False, "inputs": [
+        {"name": n, "type": t, "indexed": i} for n, t, i in [("sender", "address", True), ("recipient", "address", True), ("amount0", "int256", False),
+        ("amount1", "int256", False), ("sqrtPriceX96", "uint160", False), ("liquidity", "uint128", False), ("tick", "int24", False)]]})
+    eq(json.loads(q("web3_evm_decode_log_abi", frag, topics, data)), got, "json abi log")
+
+    call_sig = "function exec((address to, uint256[] ids) job, string note, bytes[] blobs)"
+    args = [(a, [1, 2**200]), "héllo", [b"\x01\x02", b""]]
+    payload = keccak256(b"exec((address,uint256[]),string,bytes[])")[:4] + encode(["(address,uint256[])", "string", "bytes[]"], args)
+    got = json.loads(q("web3_evm_decode_calldata", call_sig, payload))
+    eq((got["note"], [int(x) for x in got["job"]["ids"]], got["blobs"]), ("héllo", [1, 2**200], ["0x0102", "0x"]), "calldata")
+    eq(int(json.loads(q("web3_evm_decode_calldata_field", call_sig, payload, "job.ids[1]"))), 2**200, "calldata field")
+    frag = json.dumps({"type": "function", "name": "exec", "stateMutability": "nonpayable", "outputs": [], "inputs": [
+        {"name": "job", "type": "tuple", "components": [{"name": "to", "type": "address"}, {"name": "ids", "type": "uint256[]"}]},
+        {"name": "note", "type": "string"}, {"name": "blobs", "type": "bytes[]"}]})
+    eq(json.loads(q("web3_evm_decode_calldata_abi", frag, payload)), got, "json abi calldata")
+    eq(q("web3_evm_decode_calldata", call_sig, payload[:40]), None, "truncated calldata is NULL")
+
+
 def check_svm():
     rng = random.Random(4)
     for _ in range(40):
@@ -338,6 +387,23 @@ def check_garbage():
 
 def check_parquet():
     """Real samples, compared to the reference libraries row by row."""
+    if "web3_evm_decode_log" in registered:
+        from eth_abi import decode
+
+        logs = os.path.join(REPO, "test_data", "evm_logs.parquet").replace("\\", "/")
+        rows = con.execute(f"""
+            select topics, data, web3_evm_decode_log('event Transfer(address indexed from, address indexed to, uint256 value)',
+                                 web3_hex_decode(array_to_string(list_transform(topics, lambda t: replace(t, '0x', '')), '')),
+                                 web3_hex_decode(data))
+            from '{logs}'""").fetchall()
+        transfer = keccak256(b"Transfer(address,address,uint256)").hex()
+        decoded = 0
+        for topics, data, got in rows:
+            if topics and topics[0].removeprefix("0x") == transfer and len(topics) == 3:
+                eq(str(json.loads(got)["value"]), str(decode(["uint256"], bytes.fromhex(data.removeprefix("0x")))[0]), "real transfer")
+                decoded += 1
+        assert decoded, "no real Transfer rows"
+        print(f"    {decoded} real Transfer logs matched eth_abi")
     btc = os.path.join(REPO, "test_data", "bitcoin_txs.parquet").replace("\\", "/")
     rows = con.execute(f"""select vout_script_pub_key, web3_btc_script_type(web3_hex_decode(vout_script_pub_key)),
                                   web3_btc_address('bitcoin', web3_hex_decode(vout_script_pub_key))
@@ -357,7 +423,7 @@ def check_parquet():
         eq(bytes(got), b58ref.b58decode(text), "real base58")
 
 
-CHECKS = [check_hashes, check_encodings, check_math, check_svm, check_move, check_utxo, check_cosmos,
+CHECKS = [check_hashes, check_encodings, check_math, check_evm, check_svm, check_move, check_utxo, check_cosmos,
           check_clmm, check_tokens, check_lending, check_vector_semantics, check_schema_binding, check_garbage, check_parquet]
 
 
@@ -365,7 +431,7 @@ def main():
     print(f"DuckDB {duckdb.__version__}, {len(registered)} functions from {EXT}")
     for check in CHECKS:
         section = check.__name__.removeprefix("check_")
-        needs = {"svm": "web3_sol_pda", "move": "web3_bcs_decode", "utxo": "web3_btc_address", "cosmos": "web3_ibc_denom", "clmm": "web3_uni_tick_to_price", "tokens": "web3_erc_decode_json", "lending": "web3_ray_mul"}.get(section)
+        needs = {"evm": "web3_evm_decode_log", "svm": "web3_sol_pda", "move": "web3_bcs_decode", "utxo": "web3_btc_address", "cosmos": "web3_ibc_denom", "clmm": "web3_uni_tick_to_price", "tokens": "web3_erc_decode_json", "lending": "web3_ray_mul"}.get(section)
         if needs and needs not in registered:
             print(f"  skipped {section}: not in this build")
             continue

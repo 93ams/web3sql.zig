@@ -8,3 +8,4 @@ blake3
 base58
 bech32
 solders
+rlp
