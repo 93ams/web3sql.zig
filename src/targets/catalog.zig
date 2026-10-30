@@ -21,6 +21,8 @@ pub const Function = struct {
     /// Set when the first argument is a schema (ABI, IDL, ...): hosts parse it once with `prepare`
     /// and call `call_prepared` per row with the remaining arguments.
     prepared: ?Prepared = null,
+    /// Left out of the WASM bundle: pulls in `std.json`, which the size budget cannot carry.
+    native_only: bool = false,
 };
 
 pub const Prepared = struct {
@@ -51,7 +53,7 @@ fn Adapter(comptime impl: anytype, comptime skip: usize, comptime ret: RetType) 
     return struct {
         fn invoke(prefix: anytype, args: []const Arg, dest: []u8) CallError!Out {
             var tuple: std.meta.ArgsTuple(F) = undefined;
-            for (0..skip) |i| tuple[i] = prefix[i];
+            inline for (0..skip) |i| tuple[i] = prefix[i];
             inline for (params[skip..], skip..) |P, i| {
                 const T = P.?;
                 if (T == i64) {
@@ -102,6 +104,22 @@ pub fn schemaFunc(comptime name: [:0]const u8, comptime doc: []const u8, comptim
         }
     };
     return .{ .name = name, .doc = doc, .args = args, .ret = ret, .call = S.direct, .prepared = .{ .prepare = S.prepare, .call = S.prepared } };
+}
+
+/// Marks an entry as DuckDB-only.
+pub fn nativeOnly(comptime f: Function) Function {
+    var copy = f;
+    copy.native_only = true;
+    return copy;
+}
+
+/// The entries of `all` that go into the WASM bundle and warehouse scripts.
+pub fn wasmFunctions(comptime all: []const Function) []const Function {
+    var list: []const Function = &.{};
+    for (all) |f| {
+        if (!f.native_only) list = list ++ &[_]Function{f};
+    }
+    return list;
 }
 
 test "catalog adapter maps params and errors" {

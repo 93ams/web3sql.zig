@@ -1,7 +1,7 @@
 //! Fails when the wasm bundle reaches the REQ-WASM-02 budget.
 const std = @import("std");
 
-const LIMIT = 250 * 1024;
+const LIMIT = 250_000;
 
 pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(init.arena.allocator());

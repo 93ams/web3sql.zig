@@ -4,7 +4,7 @@ const std = @import("std");
 const web3sql = @import("web3sql");
 
 const sqlgen = web3sql.targets.wasm_udf.sqlgen;
-const functions = &web3sql.targets.functions;
+const functions = web3sql.targets.wasm_functions;
 
 fn writeTo(io: std.Io, path: []const u8, ctx: anytype, comptime body: fn (*std.Io.Writer, @TypeOf(ctx)) std.Io.Writer.Error!void) !void {
     const file = try std.Io.Dir.cwd().createFile(io, path, .{});

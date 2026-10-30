@@ -4,7 +4,7 @@ const std = @import("std");
 const web3sql = @import("web3sql");
 
 const catalog = web3sql.targets.catalog;
-const functions = &web3sql.targets.functions;
+const functions = web3sql.targets.wasm_functions;
 
 /// `ptr`/`len` of a byte argument, or the low/high halves of an int argument.
 const Slot = extern struct { ptr: u32, len: u32 };
