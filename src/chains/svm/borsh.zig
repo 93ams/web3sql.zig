@@ -112,8 +112,8 @@ pub const Type = union(enum) {
     array: struct { elem: *const Type, len: u32, min: u64 },
     vec: struct { elem: *const Type, min: u64 },
     option: *const Type,
-    record: []const Field,
-    enumeration: []const Variant,
+    record: struct { fields: []const Field, min: u64 },
+    enumeration: struct { variants: []const Variant, min: u64 },
 
     pub fn arrayOf(a: std.mem.Allocator, elem: Type, len: u32) std.mem.Allocator.Error!Type {
         const p = try a.create(Type);
@@ -133,19 +133,26 @@ pub const Type = union(enum) {
         return .{ .option = p };
     }
 
-    /// Smallest number of bytes any value of this type occupies (saturating).
+    pub fn recordOf(fields: []const Field) Type {
+        return .{ .record = .{ .fields = fields, .min = fieldsMin(fields) } };
+    }
+
+    pub fn enumOf(variants: []const Variant) Type {
+        var m: u64 = std.math.maxInt(u64);
+        for (variants) |v| m = @min(m, fieldsMin(v.fields));
+        return .{ .enumeration = .{ .variants = variants, .min = 1 +| (if (variants.len == 0) 0 else m) } };
+    }
+
+    /// Smallest number of bytes any value of this type occupies (saturating). O(1): IDL types share
+    /// their fields, so walking them here would visit every path through a DAG.
     pub fn minSize(self: Type) u64 {
         switch (self) {
             .prim => |p| return p.fixedSize(),
             .array => |x| return x.min *| x.len,
             .vec => return 4,
             .option => return 1,
-            .record => |fields| return fieldsMin(fields),
-            .enumeration => |vs| {
-                var m: u64 = std.math.maxInt(u64);
-                for (vs) |v| m = @min(m, fieldsMin(v.fields));
-                return 1 +| (if (vs.len == 0) 0 else m);
-            },
+            .record => |r| return r.min,
+            .enumeration => |e| return e.min,
         }
     }
 };
@@ -226,14 +233,14 @@ pub fn writeValue(ty: *const Type, r: *BorshReader, out: *JsonOut, depth: usize)
         },
         .vec => |v| try writeSeq(v.elem, try r.readVecLen(std.math.cast(usize, v.min) orelse std.math.maxInt(usize)), v.min, r, out, depth),
         .array => |a| {
-            if (a.min > r.remaining()) return BorshError.UnexpectedEndOfBuffer;
+            if (a.len > 0 and a.min > r.remaining()) return BorshError.UnexpectedEndOfBuffer;
             try writeSeq(a.elem, a.len, a.min, r, out, depth);
         },
-        .record => |fields| try writeFields(fields, r, out, depth),
-        .enumeration => |vs| {
+        .record => |x| try writeFields(x.fields, r, out, depth),
+        .enumeration => |e| {
             const tag = try r.readByte();
-            if (tag >= vs.len) return BorshError.InvalidEnumTag;
-            const v = vs[tag];
+            if (tag >= e.variants.len) return BorshError.InvalidEnumTag;
+            const v = e.variants[tag];
             if (v.fields.len == 0) return out.string(v.name);
             try out.put("{");
             try out.string(v.name);
@@ -347,7 +354,7 @@ test "REQ-SVM-02 schema renders every primitive" {
         .{ .name = "i", .ty = tp(.f32) },
         .{ .name = "j", .ty = tp(.u256) },
     };
-    const ty: Type = .{ .record = &fields };
+    const ty = Type.recordOf(&fields);
     var raw: [100]u8 = undefined;
     var n: usize = 0;
     const parts = [_][]const u8{
@@ -394,7 +401,7 @@ test "REQ-SVM-02 schema vec option array enum pubkey" {
         .{ .name = "Pair", .fields = &.{ .{ .name = "", .ty = tp(.u8) }, .{ .name = "", .ty = tp(.bool) } } },
         .{ .name = "Named", .fields = &.{.{ .name = "x", .ty = tp(.u32) }} },
     };
-    const en: Type = .{ .enumeration = &variants };
+    const en = Type.enumOf(&variants);
     try expectJson(&en, &.{0}, "\"Nothing\"");
     try expectJson(&en, &.{ 1, 5, 1 }, "{\"Pair\":[5,true]}");
     try expectJson(&en, &.{ 2, 5, 0, 0, 0 }, "{\"Named\":{\"x\":5}}");
@@ -415,12 +422,15 @@ test "REQ-SVM-02 hostile lengths and depth" {
     // 0xffffffff elements promised, 4 bytes present: rejected before any iteration.
     try std.testing.expectError(BorshError.UnexpectedEndOfBuffer, renderJson(&vec_u64, &.{ 0xff, 0xff, 0xff, 0xff, 1, 2, 3, 4 }, &buf));
     // Vec of zero-sized elements with a huge count would spin forever without consuming input.
-    const unit: Type = .{ .record = &.{} };
+    const unit = Type.recordOf(&.{});
     const vec_unit = try Type.vecOf(a, unit);
     try std.testing.expectError(BorshError.ZeroSizedElement, renderJson(&vec_unit, &.{ 0xff, 0xff, 0xff, 0xff }, &buf));
     try expectJson(&vec_unit, &.{ 0, 0, 0, 0 }, "[]");
     const huge_arr = try Type.arrayOf(a, tp(.u64), 0xffff_ffff);
     try std.testing.expectError(BorshError.UnexpectedEndOfBuffer, renderJson(&huge_arr, &.{ 1, 2, 3 }, &buf));
+    // A zero-length array needs no input, wherever it falls in the record.
+    const empty = try Type.arrayOf(a, tp(.u64), 0);
+    try expectJson(&empty, &.{}, "[]");
     // Nesting beyond MAX_DEPTH is an error, not a stack overflow.
     var t = tp(.u8);
     for (0..MAX_DEPTH + 1) |_| t = try Type.optionOf(a, t);
@@ -438,7 +448,7 @@ test "REQ-SVM-02 real compute budget instructions from test_data/svm_instruction
         .{ .name = "SetComputeUnitPrice", .fields = &.{.{ .name = "", .ty = tp(.u64) }} },
         .{ .name = "SetLoadedAccountsDataSizeLimit", .fields = &.{.{ .name = "", .ty = tp(.u32) }} },
     };
-    const ty: Type = .{ .enumeration = &variants };
+    const ty = Type.enumOf(&variants);
     const rows = [_]struct { b58: []const u8, want: []const u8 }{
         .{ .b58 = "HZoMm9", .want = "{\"SetComputeUnitLimit\":[5000]}" },
         .{ .b58 = "3QCwqmHZ4mdq", .want = "{\"SetComputeUnitPrice\":[1000000]}" },
@@ -468,7 +478,7 @@ fn stressType(a: std.mem.Allocator) !Type {
         .{ .name = "k", .ty = tp(.pubkey) },
     });
     const variants = try a.dupe(Variant, &.{ .{ .name = "A" }, .{ .name = "B", .fields = fields } });
-    return .{ .enumeration = variants };
+    return Type.enumOf(variants);
 }
 
 test "REQ-SVM-02 borsh fuzz" {

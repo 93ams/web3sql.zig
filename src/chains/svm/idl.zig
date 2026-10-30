@@ -178,9 +178,9 @@ const Resolver = struct {
 
     fn itemType(self: *Resolver, x: Value, name: []const u8, kind: Kind) IdlError!Type {
         return switch (kind) {
-            .instruction => .{ .record = try self.fields(field(x, "args")) },
+            .instruction => Type.recordOf(try self.fields(field(x, "args"), 0)),
             // Legacy events carry fields inline, legacy accounts an inline `type`; current IDLs point into `types`.
-            .event => if (field(x, "fields")) |f| .{ .record = try self.fields(f) } else try self.named(name),
+            .event => if (field(x, "fields")) |f| Type.recordOf(try self.fields(f, 0)) else try self.named(name),
             .account => if (field(x, "type")) |t| try self.body(t, 0) else try self.named(name),
         };
     }
@@ -225,23 +225,23 @@ const Resolver = struct {
     fn body(self: *Resolver, v: Value, depth: usize) IdlError!Type {
         if (depth > MAX_TYPE_DEPTH) return error.TypeTooDeep;
         const kind = try str(v, "kind");
-        if (std.mem.eql(u8, kind, "struct")) return .{ .record = try self.fields(field(v, "fields")) };
+        if (std.mem.eql(u8, kind, "struct")) return Type.recordOf(try self.fields(field(v, "fields"), depth + 1));
         if (std.mem.eql(u8, kind, "type")) return self.resolve(field(v, "alias") orelse return error.MissingField, depth + 1);
         if (!std.mem.eql(u8, kind, "enum")) return error.UnsupportedType;
         const vs = try list(field(v, "variants"));
         const out = try self.a.alloc(borsh.Variant, vs.len);
-        for (vs, out) |x, *o| o.* = .{ .name = try str(x, "name"), .fields = try self.fields(field(x, "fields")) };
-        return .{ .enumeration = out };
+        for (vs, out) |x, *o| o.* = .{ .name = try str(x, "name"), .fields = try self.fields(field(x, "fields"), depth + 1) };
+        return Type.enumOf(out);
     }
 
     /// Named fields `[{name,type}]` or tuple fields `[type]` (empty names); absent means unit.
-    fn fields(self: *Resolver, v: ?Value) IdlError![]const Field {
+    fn fields(self: *Resolver, v: ?Value, depth: usize) IdlError![]const Field {
         const arr = try list(v);
         const out = try self.a.alloc(Field, arr.len);
         for (arr, out) |x, *o| {
             if (field(x, "type")) |t| {
-                o.* = .{ .name = try str(x, "name"), .ty = try self.resolve(t, 0) };
-            } else o.* = .{ .name = "", .ty = try self.resolve(x, 0) };
+                o.* = .{ .name = try str(x, "name"), .ty = try self.resolve(t, depth) };
+            } else o.* = .{ .name = "", .ty = try self.resolve(x, depth) };
         }
         return out;
     }
@@ -262,7 +262,7 @@ const Resolver = struct {
                     const arr = try list(t);
                     const out = try self.a.alloc(Field, arr.len);
                     for (arr, out) |x, *o| o.* = .{ .name = "", .ty = try self.resolve(x, depth + 1) };
-                    return .{ .record = out };
+                    return Type.recordOf(out);
                 }
                 if (field(v, "defined")) |t| {
                     const name = if (t == .string) t.string else try str(t, "name");
@@ -351,7 +351,7 @@ test "REQ-SVM-02 idl legacy format: computed discriminators" {
     try expectDecode("{\"name\":\"MyEvent\",\"data\":{\"value\":9}}", idl.decodeEvent(&.{ 96, 184, 197, 243, 139, 2, 90, 148, 9, 0, 0, 0 }, &buf));
     try expectDecode("{\"name\":\"MyAccount\",\"data\":{\"field\":1}}", idl.decodeAccount(&.{ 246, 28, 6, 87, 251, 45, 50, 42, 1, 0, 0, 0 }, &buf));
     // `defined` argument (legacy string form).
-    try std.testing.expect(idl.instructions[3].ty.?.record[0].ty == .record);
+    try std.testing.expect(idl.instructions[3].ty.?.record.fields[0].ty == .record);
 }
 
 test "REQ-SVM-02 idl wide integers" {
@@ -418,6 +418,34 @@ test "REQ-SVM-02 idl rejects malformed input" {
     try std.testing.expect(map.instructions[0].ty == null);
     var deep: [MAX_JSON_DEPTH + 1]u8 = @splat('[');
     try std.testing.expectError(error.JsonTooDeep, Idl.parse(a, &deep));
+}
+
+/// `types` of `n` structs, T<i> having two fields of type T<i+1>, used by an instruction as `Vec<T0>`.
+fn chainIdl(a: Allocator, n: usize) ![]const u8 {
+    var w: std.Io.Writer.Allocating = .init(a);
+    try w.writer.writeAll("{\"instructions\":[{\"name\":\"a\",\"args\":[{\"name\":\"x\",\"type\":{\"vec\":{\"defined\":\"T0\"}}}]}],\"types\":[");
+    for (0..n) |i| {
+        if (i != 0) try w.writer.writeAll(",");
+        try w.writer.print("{{\"name\":\"T{d}\",\"type\":{{\"kind\":\"struct\",\"fields\":[", .{i});
+        if (i + 1 == n) {
+            try w.writer.writeAll("{\"name\":\"a\",\"type\":\"u8\"}");
+        } else {
+            try w.writer.print("{{\"name\":\"a\",\"type\":{{\"defined\":\"T{d}\"}}}},{{\"name\":\"b\",\"type\":{{\"defined\":\"T{d}\"}}}}", .{ i + 1, i + 1 });
+        }
+        try w.writer.writeAll("]}}");
+    }
+    try w.writer.writeAll("]}");
+    return w.written();
+}
+
+test "REQ-SVM-02 idl type sharing is linear and named chains are depth-limited" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const idl = try Idl.parse(a, try chainIdl(a, 12));
+    try std.testing.expectEqual(@as(u64, 1) << 11, idl.instructions[0].ty.?.record.fields[0].ty.vec.elem.minSize());
+    // Without a depth carried through named types this recurses once per type and overflows the stack.
+    try std.testing.expectError(error.TypeTooDeep, Idl.parse(a, try chainIdl(a, 20_000)));
 }
 
 fn fuzzParse(_: void, bytes: []const u8) void {

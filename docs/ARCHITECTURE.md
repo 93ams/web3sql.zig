@@ -34,7 +34,7 @@ A bad constant schema is a bind error. A bad per-row schema is `NULL`.
 
 ## Memory
 
-`Function.call` takes no allocator, so row paths cannot reach the heap. Output goes into a caller buffer: 64 KB on the stack in DuckDB, and what remains of the 60 KB row scratch in WASM. An oversized result is an error, and so `NULL`, never a truncation.
+`Function.call` takes no allocator, so row paths cannot reach the heap. Output goes into a caller buffer: 64 KB on the stack in DuckDB, and what remains of the 60 KB row scratch in WASM. An oversized result is an error, and so `NULL`, never a truncation. A non-constant schema column has no bind phase to use, so DuckDB parses it during `execute` into a per-chunk arena, and only when the value changes.
 
 ## DuckDB
 

@@ -24,6 +24,12 @@ assert.equal(call("web3_hex_decode", ["zz"], "t", "b"), null, "malformed input m
 assert.equal(call("web3_keccak256", [null], "b", "b"), null, "NULL in, NULL out");
 assert.equal(ctx.w3B64(new Uint8Array([1, 2, 3, 4])), "AQIDBA==");
 assert.equal(hex(ctx.w3Unb64("AQIDBA==")), "01020304");
+// Results that alias a long argument do not fit next to it in the scratch: NULL, never a trap.
+const opReturn = (n) => new Uint8Array(Buffer.concat([Buffer.from([0x6a, 0x4e]), Buffer.from(Uint32Array.of(n).buffer), Buffer.alloc(n, 7)]));
+assert.equal(call("web3_btc_op_return", [opReturn(30000)], "b", "b").length, 30000);
+for (const n of [31000, 33000, 59000]) assert.equal(call("web3_btc_op_return", [opReturn(n)], "b", "b"), null, `OP_RETURN of ${n} bytes`);
+assert.notEqual(call("web3_uni_sqrt_ratio_at_tick", [0], "i", "t"), null);
+for (const x of [NaN, Infinity, 1.5, 2 ** 64]) assert.equal(call("web3_uni_sqrt_ratio_at_tick", [x], "i", "t"), null, `INT argument ${x}`);
 // Differential: replay every call test_duckdb.py made, each of which DuckDB already matched
 // against a reference library. Functions marked native_only are absent from the bundle.
 const replay = process.argv[3] ?? "dist/duckdb_calls.json";

@@ -78,6 +78,7 @@ fn dispatch(f: *const catalog.Function, argv: [*]const Slot, argc: u32, out: [*]
     };
     switch (f.ret) {
         .bytes, .text => {
+            if (value.bytes.len > cap) return -1; // a slice of the argument can outgrow `dest`
             if (value.bytes.ptr != dest.ptr) std.mem.copyForwards(u8, dest[0..value.bytes.len], value.bytes);
             return @intCast(value.bytes.len);
         },

@@ -133,6 +133,7 @@ Dependencies: `M0 → M1 → {M2, M3, M4, M5} → M6 → M7 → M8`. Items insid
 - **M7.2:** bindings come from `b.addTranslateC` over the vendored headers.
 - **M7.6:** per-function exports are `(argv, argc, out, cap)`, since most functions take several arguments.
 - **M7.8:** BigQuery cannot inline the bundle (inline code limit 32 KB, external resource limit 1 MB), so it deploys as a GCS library. Snowflake remains inline and untested on a live account.
+- **M7.4 / rule 3:** a non-constant schema column allocates from a per-chunk arena when its value changes. The fixed 32 KB buffer made every ordinary IDL column return `NULL`, and bind cannot see those schemas. Constant schemas and all decoding stay allocation-free.
 - **M8.1:** Keccak-256 and Base58 miss the 1.5 GB/s target. See `docs/PERF.md`.
 
 ## 3. Parallelisation guide for agent teams

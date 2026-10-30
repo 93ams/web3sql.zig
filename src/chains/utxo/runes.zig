@@ -13,8 +13,6 @@ pub const RunesError = error{
     TruncatedScript,
     TruncatedInteger,
     IntegerOverflow,
-    /// Non-minimal LEB128 (trailing zero byte).
-    OverlongInteger,
     PayloadTooLarge,
     BufferTooSmall,
 };
@@ -23,7 +21,8 @@ pub const BODY_TAG: u128 = 0;
 
 pub const Int = struct { value: u128, rest: []const u8 };
 
-/// Reads one LEB128 u128. Mirrors ord: at most 19 bytes, no overflow, no overlong encodings.
+/// Reads one LEB128 u128. Mirrors ord's varint::decode: at most 19 bytes, no overflow, non-minimal
+/// encodings accepted.
 pub fn readInt(bytes: []const u8) RunesError!Int {
     var v: u128 = 0;
     var shift: u32 = 0;
@@ -32,7 +31,6 @@ pub fn readInt(bytes: []const u8) RunesError!Int {
         if (shift == 126 and low > 3) return RunesError.IntegerOverflow;
         v |= low << @intCast(shift);
         if (b & 0x80 == 0) {
-            if (i > 0 and low == 0) return RunesError.OverlongInteger;
             return .{ .value = v, .rest = bytes[i + 1 ..] };
         }
         shift += 7;
@@ -65,9 +63,6 @@ pub const PairIterator = struct {
     }
 };
 
-/// Max OP_RETURN script the row path buffers (consensus script size limit).
-pub const MAX_SCRIPT: usize = 10_000;
-
 /// Concatenates the data pushes after `OP_RETURN OP_13` into `dest` and returns the LEB128 payload.
 pub fn extractPayload(spk: []const u8, dest: []u8) RunesError![]const u8 {
     if (spk.len < 2 or spk[0] != script.OP_RETURN or spk[1] != script.OP_13) return RunesError.NotRunestone;
@@ -89,9 +84,11 @@ fn writeInt(w: *std.Io.Writer, v: u128) !void {
 
 /// Writes `{"fields":[[tag,value],...],"body":[int,...]}` for a runestone scriptPubKey.
 pub fn renderJson(spk: []const u8, dest: []u8) RunesError![]const u8 {
-    var pbuf: [MAX_SCRIPT]u8 = undefined;
-    const payload = try extractPayload(spk, &pbuf);
-    var w = std.Io.Writer.fixed(dest);
+    // The payload never outgrows its script, so it borrows the tail of `dest`.
+    if (spk.len > dest.len) return RunesError.BufferTooSmall;
+    const split = dest.len - spk.len;
+    const payload = try extractPayload(spk, dest[split..]);
+    var w = std.Io.Writer.fixed(dest[0..split]);
     emit(&w, payload) catch |e| return switch (e) {
         error.WriteFailed => RunesError.BufferTooSmall,
         else => |r| r,
@@ -165,12 +162,25 @@ test "REQ-UTXO-02 leb128 u128 limits" {
     over[18] = 0x04;
     try std.testing.expectError(RunesError.IntegerOverflow, readInt(&over));
     try std.testing.expectError(RunesError.IntegerOverflow, readInt(&(filled(19, 0x80) ++ [_]u8{0x01})));
-    try std.testing.expectError(RunesError.OverlongInteger, readInt(&[_]u8{ 0x80, 0x00 }));
+    // ord's varint.rs test: 18 continuation bytes then a zero decode to (0, 19).
+    const padded = filled(18, 0x80) ++ [_]u8{0x00};
+    const zero = try readInt(&padded);
+    try std.testing.expectEqual(@as(u128, 0), zero.value);
+    try std.testing.expectEqual(@as(usize, 0), zero.rest.len);
     try std.testing.expectError(RunesError.TruncatedInteger, readInt(&[_]u8{0x80}));
     try std.testing.expectError(RunesError.TruncatedInteger, readInt(&.{}));
     var out: [200]u8 = undefined;
     const spk = [_]u8{ 0x6a, 0x5d, 0x14, 2 } ++ max;
     try std.testing.expectEqualStrings("{\"fields\":[[2,\"340282366920938463463374607431768211455\"]],\"body\":[]}", try renderJson(&spk, &out));
+}
+
+test "REQ-UTXO-02 runestone longer than a standard script" {
+    // OP_RETURN outputs never execute, so the consensus script size limit does not bound them.
+    var script_bytes: [5 + 11_000]u8 = @splat(1);
+    script_bytes[0..5].* = .{ 0x6a, 0x5d, 0x4d, 0xf8, 0x2a };
+    var out: [64 * 1024]u8 = undefined;
+    const got = try renderJson(&script_bytes, &out);
+    try std.testing.expect(std.mem.startsWith(u8, got, "{\"fields\":[[1,1],[1,1],"));
 }
 
 fn walk(_: void, bytes: []const u8) void {

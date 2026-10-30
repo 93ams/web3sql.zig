@@ -9,7 +9,7 @@ const fuzz = @import("../../core/fuzz.zig");
 
 pub const OrdError = error{
     TruncatedScript,
-    /// Non-push opcode, or a tag without value, inside the envelope.
+    /// Non-push opcode in a body that `find` did not validate.
     InvalidEnvelope,
     BufferTooSmall,
 };
@@ -43,18 +43,25 @@ pub const Inscription = struct {
     }
 };
 
-/// Finds the first `OP_FALSE OP_IF "ord"` envelope in `witness_script`; null if there is none.
+/// First well-formed `OP_FALSE OP_IF "ord"` envelope in `witness_script`, or null. As in ord's
+/// `from_tapscript`, a bad envelope is skipped and an undecodable script yields nothing at all, so
+/// the whole script is walked even after a match.
 pub fn find(witness_script: []const u8) OrdError!?Inscription {
     var it = script.Iterator.init(witness_script);
+    var found: ?Inscription = null;
     var p1: u16 = 0x100; // previous opcode, 0x100 = none
     var p2: u16 = 0x100;
     while (it.next() catch return OrdError.TruncatedScript) |ins| {
-        if (ins.isPush() and ins.opcode != 0 and std.mem.eql(u8, ins.data, PROTOCOL_ID) and p1 == script.OP_IF and p2 == script.OP_0)
-            return try parseFields(&it);
+        if (found == null and ins.isPush() and ins.opcode != 0 and std.mem.eql(u8, ins.data, PROTOCOL_ID) and p1 == script.OP_IF and p2 == script.OP_0) {
+            found = try parseEnvelope(&it);
+            p1 = 0x100;
+            p2 = 0x100;
+            continue;
+        }
         p2 = p1;
         p1 = ins.opcode;
     }
-    return null;
+    return found;
 }
 
 const PUSHNUM_VALUES = [_]u8{ 0x81, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 };
@@ -67,17 +74,27 @@ fn pushValue(ins: *const script.Instruction) ?[]const u8 {
     return PUSHNUM_VALUES[ins.opcode - 0x4f ..][0..1];
 }
 
-fn parseFields(it: *script.Iterator) OrdError!Inscription {
+/// Walks one envelope to its OP_ENDIF. Null if it never gets there or holds a non-push, as in
+/// ord's `from_instructions`. Tag and value alternate until an empty tag starts the body; a tag
+/// left without a value is ord's `incomplete_field`, which is still an inscription.
+fn parseEnvelope(it: *script.Iterator) OrdError!?Inscription {
     var ct: ?[]const u8 = null;
-    while (true) {
-        const tag = (it.next() catch return OrdError.TruncatedScript) orelse return .{ .content_type = ct, .body_script = &.{} };
-        if (tag.opcode == script.OP_ENDIF) return .{ .content_type = ct, .body_script = &.{} };
-        if (tag.opcode == script.OP_0) return .{ .content_type = ct, .body_script = it.rest };
-        const tag_bytes = pushValue(&tag) orelse return OrdError.InvalidEnvelope;
-        const val = (it.next() catch return OrdError.TruncatedScript) orelse return OrdError.InvalidEnvelope;
-        const val_bytes = pushValue(&val) orelse return OrdError.InvalidEnvelope;
-        if (ct == null and tag_bytes.len == 1 and tag_bytes[0] == 1) ct = val_bytes;
+    var tag: ?[]const u8 = null;
+    var in_body = false;
+    var body: []const u8 = &.{};
+    while (it.next() catch return OrdError.TruncatedScript) |ins| {
+        if (ins.opcode == script.OP_ENDIF) return .{ .content_type = ct, .body_script = body };
+        const push = pushValue(&ins) orelse return null;
+        if (in_body) continue;
+        if (tag) |t| {
+            if (ct == null and t.len == 1 and t[0] == 1) ct = push;
+            tag = null;
+        } else if (push.len == 0) {
+            in_body = true;
+            body = it.rest;
+        } else tag = push;
     }
+    return null;
 }
 
 fn plainAscii(s: []const u8) bool {
@@ -136,11 +153,25 @@ test "REQ-UTXO-02 ordinals absent, empty and malformed" {
     var ins = (try find(&[_]u8{ 0x00, 0x63, 0x03, 'o', 'r', 'd', 0x68 })).?;
     try std.testing.expect(ins.content_type == null);
     try std.testing.expect((try ins.nextChunk()) == null);
-    try std.testing.expectError(OrdError.InvalidEnvelope, find(&[_]u8{ 0x00, 0x63, 0x03, 'o', 'r', 'd', 0x51 }));
-    try std.testing.expectError(OrdError.InvalidEnvelope, find(&[_]u8{ 0x00, 0x63, 0x03, 'o', 'r', 'd', 0x01, 0x01, 0x68 }));
+    // Unterminated: no inscription, even with a complete-looking body.
+    try std.testing.expect((try find(&[_]u8{ 0x00, 0x63, 0x03, 'o', 'r', 'd', 0x51 })) == null);
+    try std.testing.expect((try find(&[_]u8{ 0x00, 0x63, 0x03, 'o', 'r', 'd', 0x01, 0x01, 0x01, 0x41, 0x00, 0x02, 'h', 'i' })) == null);
+    // ord's incomplete_field: a tag without a value is still an inscription.
+    try std.testing.expect((try find(&[_]u8{ 0x00, 0x63, 0x03, 'o', 'r', 'd', 0x01, 0x01, 0x68 })).?.content_type == null);
     try std.testing.expectError(OrdError.TruncatedScript, find(&[_]u8{ 0x00, 0x63, 0x03, 'o', 'r', 'd', 0x05 }));
     var out: [8]u8 = undefined;
     try std.testing.expectEqualStrings("null", try renderJson(&[_]u8{0x51}, &out));
+}
+
+test "REQ-UTXO-02 ordinals bad envelopes do not hide later ones, per ord envelope.rs" {
+    const bad = [_]u8{ 0x00, 0x63, 0x03, 'o', 'r', 'd', 0x76, 0x68 }; // OP_DUP inside
+    const good = [_]u8{ 0x00, 0x63, 0x03, 'o', 'r', 'd', 0x00, 0x02, 'h', 'i', 0x68 };
+    var buf: [8]u8 = undefined;
+    try std.testing.expectEqualStrings("hi", try (try find(&(bad ++ good))).?.readBody(&buf));
+    // First envelope wins when both are good.
+    try std.testing.expectEqualStrings("hi", try (try find(&(good ++ [_]u8{ 0x00, 0x63, 0x03, 'o', 'r', 'd', 0x68 }))).?.readBody(&buf));
+    // A script that stops decoding drops every envelope, even one already complete.
+    try std.testing.expectError(OrdError.TruncatedScript, find(&(good ++ [_]u8{0x05})));
 }
 
 fn walk(_: void, bytes: []const u8) void {

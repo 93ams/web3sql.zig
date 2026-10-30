@@ -20,7 +20,7 @@ const RUNTIME =
     \\w.web3_free();
     \\var argv=w.web3_alloc(8*n);if(!argv&&n)return null;
     \\for(var i=0;i<n;i++){var v=args[i],k=kinds.charAt(i),lo,hi;
-    \\if(k=="i"){var x=Number(v);lo=x>>>0;hi=Math.floor(x/4294967296)>>>0;}
+    \\if(k=="i"){var x=Number(v);if(!Number.isSafeInteger(x))return null;lo=x>>>0;hi=Math.floor(x/4294967296)>>>0;}
     \\else{var u=k=="t"?w3Utf8(String(v)):(typeof v=="string"?w3Unb64(v):v);lo=u.length?w.web3_alloc(u.length):0;if(u.length&&!lo)return null;hi=u.length;new Uint8Array(w.memory.buffer,lo,u.length).set(u);}
     \\var dv=new DataView(w.memory.buffer);dv.setUint32(argv+8*i,lo,true);dv.setUint32(argv+8*i+4,hi,true);}
     \\var cap=w.web3_available(),out=w.web3_alloc(cap),len=w[name](argv,n,out,cap);
@@ -143,7 +143,7 @@ pub fn writeFunctionDocs(w: *Writer, functions: []const catalog.Function) Writer
     try w.writeAll(
         \\# SQL functions
         \\
-        \\Generated from the function catalogue by `zig build docs`. Any malformed row returns `NULL`.
+        \\Generated from the function catalogue by `zig build docs`. Any malformed row returns `NULL`, and so does a valid row whose result exceeds 64 KB in DuckDB, or the 60 KB shared by arguments and result in WASM.
         \\Types are DuckDB's. Functions marked *DuckDB only* parse JSON, and are left out of the WASM bundle to fit its size budget.
         \\
         \\| Function | Returns | Description |

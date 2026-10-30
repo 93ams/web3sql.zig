@@ -233,6 +233,13 @@ def check_utxo():
     assert runes, "runestone json"
     ins = json.loads(q("web3_btc_inscription_json", b"\x00\x63\x03ord\x51\x0atext/plain\x00\x02hi\x68"))
     eq(ins["content_type"], "text/plain", "inscription")
+    # Expected values below follow ord's envelope.rs and varint.rs.
+    good = b"\x00\x63\x03ord\x00\x02hi\x68"
+    eq(json.loads(q("web3_btc_inscription_json", b"\x00\x63\x03ord\x76\x68" + good))["body"], "0x6869", "bad envelope does not hide a later one")
+    eq(q("web3_btc_inscription_json", b"\x00\x63\x03ord\x01\x01\x0atext/plain\x00\x02hi"), "null", "unterminated envelope")
+    eq(q("web3_btc_runestone_json", b"\x6a\x5d\x05\x82\x00\x05\x00\x01"), '{"fields":[[2,5]],"body":[1]}', "non-minimal varint")
+    big = json.loads(q("web3_btc_runestone_json", b"\x6a\x5d\x4d" + struct.pack("<H", 11000) + b"\x01" * 11000))
+    eq(len(big["fields"]), 5500, "runestone over 10 KB")
 
 
 def check_cosmos():
@@ -375,6 +382,29 @@ def check_schema_binding():
         assert "invalid schema" in str(e), e
     else:
         raise AssertionError("constant bad schema must fail at bind")
+    eq(q("web3_borsh_decode", "{a:u8,b:[u64;0]}", b"\x05"), '{"a":5,"b":[]}', "empty array at end of input")
+    # A real IDL column is far larger than the constant-path fixtures suggest.
+    with open(os.path.join(REPO, "src", "chains", "svm", "testdata", "external.json")) as f:
+        external = f.read()
+    update = bytes([219, 200, 88, 176, 158, 63, 253, 127, 7, 0, 0, 0])
+    eq(con.execute("select web3_anchor_decode_instruction(s, ?) from (values (?)) t(s)", [update, external]).fetchall(),
+       [('{"name":"update","data":{"value":7}}',)], "IDL in a column")
+
+    def idl(types, order):
+        fields = lambda i: [{"name": n, "type": {"defined": f"T{i + 1}"}} for n in "ab"] if i + 1 < types else [{"name": "a", "type": "u8"}]
+        return json.dumps({
+            "instructions": [{"name": f"i{i}", "args": [{"name": "x", "type": {"vec": {"defined": f"T{i}"}}}]} for i in order],
+            "types": [{"name": f"T{i}", "type": {"kind": "struct", "fields": fields(i)}} for i in range(types)],
+        })
+    # Resolved tail first, so depth stays shallow and only the size of the shared types is at stake:
+    # 2^39 paths, hours before Type.minSize stopped walking them.
+    con.execute(f"select web3_anchor_decode_instruction('{idl(40, range(39, -1, -1))}', ?)", [update]).fetchall()
+    try:
+        con.execute(f"select web3_anchor_decode_instruction('{idl(20000, [0])}', ?)", [update]).fetchall()
+    except duckdb.Error as e:
+        assert "invalid schema" in str(e), e
+    else:
+        raise AssertionError("a named chain past the depth limit must fail at bind, not overflow the stack")
     # Distinct rows, or DuckDB folds the call into one evaluation and the timing means nothing.
     n = 1_000_000
     rows = f"(select printf('%08d', i)::blob b, '{{a:u64}}' s from range({n}) t(i))"

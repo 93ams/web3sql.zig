@@ -56,7 +56,7 @@ const Parser = struct {
                 if (self.eat('}')) break;
                 if (!self.eat(',')) return error.InvalidSchema;
             }
-            return .{ .record = try fields.toOwnedSlice(self.a) };
+            return borsh.Type.recordOf(try fields.toOwnedSlice(self.a));
         }
         const name = self.word();
         if (std.mem.eql(u8, name, "vec")) return borsh.Type.vecOf(self.a, try self.inner(depth));

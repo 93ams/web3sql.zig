@@ -1,6 +1,6 @@
 # SQL functions
 
-Generated from the function catalogue by `zig build docs`. Any malformed row returns `NULL`.
+Generated from the function catalogue by `zig build docs`. Any malformed row returns `NULL`, and so does a valid row whose result exceeds 64 KB in DuckDB, or the 60 KB shared by arguments and result in WASM.
 Types are DuckDB's. Functions marked *DuckDB only* parse JSON, and are left out of the WASM bundle to fit its size budget.
 
 | Function | Returns | Description |

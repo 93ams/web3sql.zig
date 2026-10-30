@@ -89,19 +89,20 @@ const Column = struct {
     }
 };
 
-/// Per-chunk cache for a non-constant schema column: rows usually repeat one value.
+/// Per-chunk cache for a non-constant schema column: rows usually repeat one value. Only this path
+/// allocates during execute: bind never sees these schemas, and real IDLs run to hundreds of KB.
 const SchemaCache = struct {
     key: []const u8 = "",
     schema: ?*const anyopaque = null,
-    fba: std.heap.FixedBufferAllocator,
+    arena: std.heap.ArenaAllocator,
 
     fn get(self: *SchemaCache, function: *const Function, text: []const u8) catalog.CallError!*const anyopaque {
         if (self.schema) |s| {
             if (std.mem.eql(u8, self.key, text)) return s;
         }
-        self.fba.reset();
+        _ = self.arena.reset(.retain_capacity);
         self.schema = null;
-        const s = try function.prepared.?.prepare(self.fba.allocator(), text);
+        const s = try function.prepared.?.prepare(self.arena.allocator(), text);
         self.key = text;
         self.schema = s;
         return s;
@@ -126,8 +127,8 @@ fn execute(info: c.duckdb_function_info, input: c.duckdb_data_chunk, output: c.d
     const out_data = api.duckdb_vector_get_data.?(output);
 
     var scratch: [ROW_OUTPUT_LIMIT]u8 = undefined;
-    var schema_buf: [32 * 1024]u8 = undefined;
-    var cache: SchemaCache = .{ .fba = .init(&schema_buf) };
+    var cache: SchemaCache = .{ .arena = .init(std.heap.page_allocator) };
+    defer cache.arena.deinit();
     var args: [8]catalog.Arg = undefined;
 
     rows: for (0..rows) |row| {

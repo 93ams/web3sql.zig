@@ -16,7 +16,7 @@ for(var i=0;i<n;i++)if(args[i]===null||args[i]===undefined)return null;
 w.web3_free();
 var argv=w.web3_alloc(8*n);if(!argv&&n)return null;
 for(var i=0;i<n;i++){var v=args[i],k=kinds.charAt(i),lo,hi;
-if(k=="i"){var x=Number(v);lo=x>>>0;hi=Math.floor(x/4294967296)>>>0;}
+if(k=="i"){var x=Number(v);if(!Number.isSafeInteger(x))return null;lo=x>>>0;hi=Math.floor(x/4294967296)>>>0;}
 else{var u=k=="t"?w3Utf8(String(v)):(typeof v=="string"?w3Unb64(v):v);lo=u.length?w.web3_alloc(u.length):0;if(u.length&&!lo)return null;hi=u.length;new Uint8Array(w.memory.buffer,lo,u.length).set(u);}
 var dv=new DataView(w.memory.buffer);dv.setUint32(argv+8*i,lo,true);dv.setUint32(argv+8*i+4,hi,true);}
 var cap=w.web3_available(),out=w.web3_alloc(cap),len=w[name](argv,n,out,cap);

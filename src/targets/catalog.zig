@@ -98,7 +98,7 @@ pub fn schemaFunc(comptime name: [:0]const u8, comptime doc: []const u8, comptim
             const p: Ptr = @ptrCast(@alignCast(schema));
             return Adapter(impl, 1, ret).invoke(.{p}, row, dest);
         }
-        // Uncached route for hosts with no bind phase. 32 KB covers the largest schema M7 accepts.
+        // Uncached route for hosts with no bind phase, so limited to schemas that parse within 32 KB.
         fn direct(all: []const Arg, dest: []u8) CallError!Out {
             var buf: [32 * 1024]u8 = undefined;
             var fba = std.heap.FixedBufferAllocator.init(&buf);
