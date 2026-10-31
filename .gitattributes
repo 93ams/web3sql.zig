@@ -1,0 +1,2 @@
+# Zig fmt and byte-exact test data need LF, including on Windows checkouts.
+* text=auto eol=lf
