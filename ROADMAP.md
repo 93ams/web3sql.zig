@@ -1,159 +1,151 @@
-# ROADMAP: web3sql.zig
+# ROADMAP: web3sql.zig to production
 
-Executable plan for one agent or a team of agents. `prd.md` says **what**; this file says **in what order, by whom, and how to know it is done**.
+Everything in `prd.md` has a tested first implementation, tagged `v0.1.0` locally. This file lists what remains before a release people can depend on. `prd.md` says **what**; this file says **in what order, and how to know it is done**.
 
-Toolchain: Zig 0.17.0 (`build.zig.zon` `minimum_zig_version`). Verify every claim with `zig build test`; never mark a task done on "it compiles".
+For now there is no bulk real data, no GitHub repository and no warehouse account. So the plan has two parts: §4 is everything this machine can prove, and §5 is the handoff to professionals. Done means `make verify` passes and the handoff list is the only thing left.
 
----
-
-## 0. Baseline audit (state of the repo)
-
-The tree matches the PRD's layout, but most modules are scaffolds with smoke tests. Gaps against the PRD, ranked by risk:
-
-| # | Finding | Severity | Where |
-|---|---------|----------|-------|
-| A1 | `deriveCreateAddress` ignores `nonce`, hashes the sender only. Returns **wrong addresses**. No `CREATE2`. | correctness | `chains/evm/address.zig` |
-| A2 | `computeDiscriminator` falls back to hashing the bare name if the 128-byte buffer overflows. Silent wrong output. | correctness | `chains/svm/anchor.zig` |
-| A3 | OP_RETURN: `PUSHDATA2/4` missing; unknown push returns "rest of script" as payload. | correctness | `chains/utxo/op_return.zig` |
-| A4 | BCS/Borsh: `cursor + len` can overflow `usize` (wasm32) and `@intCast(u64 → usize)` can panic on hostile length. Violates the fuzz requirement. | security | `move/bcs.zig`, `svm/borsh.zig` |
-| A5 | Base58: fixed 512-byte stack buffer, O(n²), no decode, no Base58Check. Bech32: only `polymod`, no encode/decode. Base64, varint minimal. | feature gap | `core/encodings/` |
-| A6 | No ABI signature parser, no head/tail decoder (only `readWord`). No JSON ABI. | feature gap (REQ-EVM-02/03) | `chains/evm/` |
-| A7 | No Ed25519 on-curve check / PDA (REQ-SVM-01). No Borsh Vec/Option/array, no Anchor IDL. | feature gap | `chains/svm/` |
-| A8 | No `TypeTag` parser (only enum), no BCS ints/Option/struct. | feature gap | `chains/move/` |
-| A9 | No tick math (`getSqrtRatioAtTick`), no Q64.64 price→decimal, no compounding (`rayPow`, interest index), no SPL decoder tests, no Approval decoder. | feature gap | `protocols/` |
-| A10 | `duckdb_main.zig` returns `true` and registers **zero functions**. No `duckdb_extension.h` bindings. `package_duckdb.py` appends a footer by hand. | feature gap (REQ-DUCK-*) | `targets/duckdb_ext/` |
-| A11 | WASM exports one function, uses a global 64 KB buffer, no ABI for variable-width returns, no size check, no SQL generator. | feature gap (REQ-WASM-*) | `targets/wasm_udf/`, `wasm_main.zig` |
-| A12 | No fuzz tests, no benchmarks, no CI, no golden-vector corpus, no README. `unknown chain` flag only warns. | quality | repo-wide |
-| A13 | `build.zig`: `-Dchains=bogus` silently builds with nothing; `src/root.zig` repeats the "any chain enabled" expression 3×; three near-identical entry modules. | organization | `build.zig`, `src/root.zig` |
-| A14 | `.gitignore` ignores `*.wasm`, `*.dll`, so release artifacts are untracked (intended), but there is no `dist/` and no repo `git init`. | hygiene | repo root |
+Toolchain: Zig 0.17.0. On WSL under `/mnt/c`, builds need `ZIG_LOCAL_CACHE_DIR` outside the repository; the Makefile sets it.
 
 ---
 
-## 1. Working rules (apply to every task)
+## 1. Open questions for the handoff
 
-1. **Test-first with known-answer vectors.** Every primitive gets vectors from an authoritative source (RFC, BIP, EIP, Uniswap/Aave reference code). Cite the source in a comment next to the vector.
-2. **Decoders never panic.** Every `[]const u8` reader uses checked arithmetic (`std.math.add`, `std.math.cast`) and returns an error. Add a fuzz test (`std.testing.fuzz`) per decoder.
-3. **No allocation in row paths.** Row-path functions take caller-provided buffers or a `FixedBufferAllocator`. Anything that needs an allocator goes in `bind` time.
-4. **One error set per module, mapped to NULL at the target layer.** Targets turn any error into SQL `NULL` (REQ-DUCK-04); libraries return typed errors.
-5. **Feature flags stay at the edges.** Only `root.zig` files read `build_options`. Leaf modules import siblings by relative path.
-6. **Every PRD requirement ID maps to at least one test name** containing the ID, e.g. `test "REQ-EVM-01 create2 ..."`. `scripts/req_coverage.sh` greps for this (task M0.6).
-7. **Done = merged to the working tree, `zig build test` green for default flags AND `-Dchains=none -Dprotocols=none`**, and the module's section in `docs/` or doc comments updated.
+None of these block local work.
 
----
-
-## 2. Milestones
-
-Dependencies: `M0 → M1 → {M2, M3, M4, M5} → M6 → M7 → M8`. Items inside M2–M5 are independent and can be parallel agent lanes.
-
-### M0: Foundation, hygiene, correctness (blocks everything)
-- [x] M0.1 Fix A1: `CREATE` via minimal RLP of `[sender, nonce]`; add `CREATE2`. Vectors: EIP-1014 examples; known deployer/nonce pairs.
-- [x] M0.2 Fix A2: make `computeDiscriminator` take an output-checked name length (reject >64 bytes) instead of silent fallback; vectors for `global:initialize`.
-- [x] M0.3 Fix A3: full push-opcode handling (direct, `PUSHDATA1/2/4`), reject truncated/unknown, multi-push support.
-- [x] M0.4 Fix A4: add a shared `core/reader.zig` (`Reader` with checked `take(n)`, `readInt`, `readUleb128`) and rebuild `BorshReader`/`BcsReader` on top. One audited cursor, no duplicated bounds logic.
-- [x] M0.5 `build.zig`: unknown chain/protocol → hard error (`b.fatal`); compute `any_chain` / `any_protocol` once and export in `build_options`; helper to define the 3 target modules without repetition.
-- [x] M0.6 `scripts/req_coverage.sh`: lists PRD `REQ-*` ids with no matching test name.
-- [x] M0.7 CI (`.github/workflows/ci.yml`): Linux/macOS/Windows `zig build test`, flag matrix (`all`, `none`, each single chain), `zig fmt --check`.
-- [x] M0.8 `git init`, tag `v0.0.1`, add `README.md` (build flags, targets, function catalogue generated from M7).
-
-**Acceptance:** A1–A4, A13 closed; CI matrix green.
-
-### M1: Core layer (REQ-CORE-01..03)
-- [x] M1.1 **Math:** `I256` signed ops (`checkedAdd/Sub/Mul`, `divTrunc`, `divFloor`), `mulDivRoundingUp`, `isqrt`, decimal parse/format for u256/i256 (hot path for SQL `VARCHAR`/`DECIMAL(38)` bridging), `u256 ⇄ [32]u8` big/little endian. Property tests vs `std.math.big.int` oracle.
-- [x] M1.2 **Hex:** SIMD (`@Vector(16,u8)`) encode + decode with scalar tail; throughput bench ≥ 1.5 GB/s.
-- [x] M1.3 **Base58:** O(n·limbs) encode with base-58^10 limbs, decode, Base58Check (double-SHA256 4-byte checksum), size-bounded inputs (≤ 128 B documented), no hidden 512-byte stack buffer. Vectors: Bitcoin Core `base58_encode_decode.json`.
-- [x] M1.4 **Bech32/Bech32m:** full encode/decode/convert-bits (BIP-173/350 vectors incl. invalid cases), HRP validation, Segwit address helpers.
-- [x] M1.5 **Base64/Base64URL:** padded/unpadded, strict mode; RFC 4648 vectors.
-- [x] M1.6 **ULEB128/varint:** u64 + u128 + u256, canonical-encoding check (BCS requires minimal), overlong rejection.
-- [x] M1.7 **Crypto:** thin wrappers already delegate to `std.crypto`; add `hash160`, `sha256d`, `keccak256` streaming + batch API; RIPEMD160 vs official vectors; verify Blake3 against official test vectors; confirm SIMD hash throughput in `bench/`.
-- [x] M1.8 **Ed25519 point validity** (`core/crypto/ed25519.zig`): `isOnCurve(32 bytes)` using `std.crypto.ecc.Edwards25519.fromBytes` (needed by M3 PDA).
-- [x] M1.9 `bench/` harness (`zig build bench`) emitting MB/s and ops/s; baseline numbers committed in `docs/PERF.md`.
-
-**Acceptance:** all REQ-CORE ids covered; bench meets §6 targets or the gap is written down in `docs/PERF.md`.
-
-### M2: EVM (REQ-EVM-01..03): lane A
-- [x] M2.1 Address: EIP-55 validate (not only format), parse, `CREATE`/`CREATE2` (from M0.1).
-- [x] M2.2 **Type grammar & signature parser:** `uintN/intN/address/bool/bytesN/bytes/string/T[]/T[N]/(tuple)`, `indexed`, named params, human-readable (`event Swap(...)`, `function ...`) → comptime-free runtime `Type` tree stored in a caller arena at bind time. Canonical signature rendering → `topic0`/selector.
-- [x] M2.3 **JSON ABI fragments:** `std.json` parse of event/function fragments → same `Type` tree. Reject unknown types with errors, not panics.
-- [x] M2.4 **Head/tail decoder:** static and dynamic types, nested tuples/arrays, offset/length bounds checks, cycle/overlap-safe (offset must stay within data; total work capped by `data.len`). Output as a flat "value cursor" API (no allocation) plus `decodeField(path)` for SQL extraction of one field.
-- [x] M2.5 **Log decoding:** `topics[1..]` for indexed params, `data` for the rest; dynamic indexed params surface as their hash.
-- [x] M2.6 Calldata decoding: selector match + args.
-- [x] M2.7 Fuzz: ABI decoder, signature parser. Known-answer: Uniswap v3 `Swap`, ERC-20 `Transfer`, Seaport `OrderFulfilled`.
-
-**Acceptance:** ≥ 500k decoded Swap logs/s/core on bench; fuzz 10M iterations clean.
-
-### M3: SVM (REQ-SVM-01..02): lane B
-- [x] M3.1 Pubkey: Base58 parse/format (uses M1.3), `isOnCurve` (M1.8), `findProgramAddress`/`createProgramAddress` with bump search 255→0 and seed limits (≤16 seeds, ≤32 B each).
-- [x] M3.2 Borsh: complete reader (all ints, f32/f64, bool, string, fixed array, `Vec<T>`, `Option<T>`, enums, structs) driven by a runtime schema; guard `Vec` length against remaining bytes before iterating.
-- [x] M3.3 Anchor: discriminators (M0.2), event CPI log parsing (`Program data: <base64>`), IDL JSON → schema (types, accounts, events, instructions).
-- [x] M3.4 Fuzz Borsh/IDL decode. Vectors from Anchor's own test suite; Raydium/Orca swap instruction samples from `test_data/svm_instructions.parquet`.
-
-### M4: Move (REQ-MOVE-01..02): lane C
-- [x] M4.1 Address: short-form normalisation (exists), Aptos/Sui display rules, validation.
-- [x] M4.2 **TypeTag parser:** recursive descent, `vector<T>`, `0xaddr::module::Name<T1, T2>`, depth limit (32), returns zero-alloc view slices.
-- [x] M4.3 BCS: ints to u256, bool, ULEB128 lengths (canonical-only), option, vector, string, struct via runtime schema; reject non-canonical ULEB and trailing bytes (strict mode).
-- [x] M4.4 Fuzz BCS/TypeTag; Aptos/Sui published vectors.
-
-### M5: UTXO + Cosmos (REQ-UTXO-01..02, REQ-COSMOS-01): lane D
-- [x] M5.1 Script classifier: add bare multisig, P2PK, P2WSH validation, witness v1+ unknown; **address derivation** per network (mainnet/testnet/Litecoin HRP + version bytes) via Base58Check and Bech32/Bech32m (M1).
-- [x] M5.2 Script iterator (push-data decode) with bounds checks; OP_RETURN (M0.3), Runes (`OP_13` + pushes, LEB128 payload) and Ordinals envelope detection.
-- [x] M5.3 Cosmos: HRP conversion (decode → re-encode with new HRP, checksum valid), address validation, IBC denom trace hash (exists) + trace parsing (`transfer/channel-0/uatom`).
-- [x] M5.4 Fuzz script classifier/iterator. Vectors from Bitcoin Core `script_tests.json` (classification subset), BIP-173/350/86.
-
-### M6: Protocols (REQ-PROT-01..03): lane E (needs M1 math only)
-- [x] M6.1 CLMM Q64.96: `getSqrtRatioAtTick` / `getTickAtSqrtRatio` (exact Uniswap `TickMath` port, tick range ±887272), `sqrtPriceX96 → price` as scaled decimal with decimals adjustment, `getAmount0/1Delta`, `mulDivRoundingUp`. Differential test vs published `TickMath` test vectors.
-- [x] M6.2 CLMM Q64.64: Orca `sqrt_price_from_tick_index`, Raydium CLMM tick math, Cetus I32 tick; price decimals.
-- [x] M6.3 Tokens: ERC-20 `Transfer`/`Approval`, ERC-721 variant (4 topics), ERC-1155 `TransferSingle`; SPL `Transfer`/`TransferChecked`/`Approve` instruction decoders (u8 discriminant + u64 LE).
-- [x] M6.4 Lending: `rayDiv`, `wadDiv`, `rayPow` (exponentiation by squaring), linear + compounded interest (Aave `MathUtils`), normalised income/debt, health factor (exists; add fuzz that HF is monotone in collateral), Compound exchange-rate math.
-
-### M7: Targets (REQ-DUCK-*, REQ-WASM-*): sequential after lanes A–E have a stable API
-- [x] M7.1 **Function catalogue** `src/targets/catalog.zig`: one declarative table (name, arg types, return type, impl fn) that **both** targets and the SQL generators consume. Single source of truth so DuckDB/WASM/SQL files can never drift.
-- [x] M7.2 DuckDB bindings: vendor `duckdb_extension.h` (pinned C-API version, `unstable` excluded), translate the function-pointer struct with `@cImport` or a hand-written minimal extern struct; implement `web3_init_c_api` (`DUCKDB_EXTENSION_ENTRYPOINT`), register scalar functions from the catalogue.
-- [x] M7.3 Vectorized scalar executor: loop 2048-row chunks, validity-mask in/out, BLOB/VARCHAR (`duckdb_string_t` inline vs pointer) in/out, any error → `NULL` (REQ-DUCK-04).
-- [x] M7.4 Bind-time caching (REQ-DUCK-03): parse ABI/IDL on bind for constant args, store in `bind_data`, free in destroy callback; non-constant argument falls back to per-row parse with a small per-chunk cache keyed by pointer+len.
-- [x] M7.5 Replace `scripts/package_duckdb.py` footer logic with a `zig build` step (`-Dduckdb_platform=`) so packaging is one command; keep python only for the integration test. Remove the committed `zig-out/`.
-- [x] M7.6 WASM ABI: exported `alloc/free` over a bump arena (<64 KB scratch), per-function exports `(in_ptr,in_len,out_ptr,out_cap) -> i32 out_len | -1`; SIMD128 enabled in target query (`.cpu_features_add = wasm.featureSet(&.{.simd128})`); `wasm-opt`/`strip`-equivalent via `-fstrip`.
-- [x] M7.7 Size gate (REQ-WASM-02): `zig build wasm-size` fails if `web3_sql.wasm` ≥ 250 KB; flag matrix builds (evm-only etc.) report sizes in CI.
-- [x] M7.8 SQL generators (REQ-WASM-03): `zig build wasm` emits `dist/snowflake_udfs.sql` (JS-wrapper UDF embedding base64 wasm) and `dist/bigquery_udfs.sql` (JS UDF with inline wasm bytes) from the catalogue. Golden-file tests of the generated SQL.
-- [x] M7.9 Integration tests: `scripts/test_duckdb.py` executes every catalogue function against `test_data/*.parquet` and compares to expected values from an independent reference (Python `eth_abi`/`web3`, `solders`, `bech32` in a dev-only venv).
-
-**Acceptance:** `SELECT` of every catalogue function works in DuckDB and in a Node/wasmtime harness for WASM; gate on size passes.
-
-### M8: Performance, security, release
-- [x] M8.1 Profile hot paths (`perf`/`samply`); target numbers in §6. Candidates: Keccak AVX2/NEON path via std vector ops, batch Keccak API for `topic0` columns, branch-free hex.
-- [x] M8.2 Memory audit: prove "no global heap allocations in row processing" with a failing allocator in tests (`std.testing.FailingAllocator` set to 0 in row-path tests).
-- [x] M8.3 Security pass: run all decoders under `-OReleaseSafe` fuzz for 1h each in CI nightly; add `SECURITY.md`; supply-chain: zero deps (keep it).
-- [x] M8.4 Docs: `docs/FUNCTIONS.md` generated from the catalogue; `docs/ARCHITECTURE.md`; dbt-duckdb example project under `examples/`.
-- [ ] M8.5 Release: version bump, tagged artifacts for linux/macos/windows/wasm, DuckDB community-extensions descriptor.
+| # | Question | Affects |
+|---|---|---|
+| D2 | Where does the repo live? CI, nightly fuzz and releases have never run. | H1 |
+| D3 | Who provides a Snowflake account and a GCP project with a bucket, and with what cost cap? | H4, H5 |
+| D4 | Are Spark/Databricks and Polars in scope? The PRD names them and no target exists. DuckDB-WASM is named too, and is untested. | `prd.md` |
+| D5 | Is a GCS bucket acceptable for the 5 BigQuery functions over the 32 KB inline limit? The other 77 need none. | H4 |
+| D6 | Keccak-256 and Base58 at 1.5 GB/s: build multi-buffer Keccak, or restate the targets? See `docs/PERF.md`. | `prd.md` |
 
 ---
 
-## 2a. Deviations found while executing
+## 2. Working rules
 
-- **M1.3:** Base58 uses 58^5 limbs and a 1280-byte bound, not 58^10 and 128 bytes. 58^10 needs u128 division, and real Solana instruction data exceeds 128 bytes.
-- **M7.2:** bindings come from `b.addTranslateC` over the vendored headers.
-- **M7.6:** per-function exports are `(argv, argc, out, cap)`, since most functions take several arguments.
-- **M7.8:** BigQuery cannot inline the bundle (inline code limit 32 KB, external resource limit 1 MB), so it deploys as a GCS library. Snowflake remains inline and untested on a live account.
-- **M7.4 / rule 3:** a non-constant schema column allocates from a per-chunk arena when its value changes. The fixed 32 KB buffer made every ordinary IDL column return `NULL`, and bind cannot see those schemas. Constant schemas and all decoding stay allocation-free.
-- **M8.1:** Keccak-256 and Base58 miss the 1.5 GB/s target. See `docs/PERF.md`.
+1. **Known answers from an authoritative source.** Cite it next to the vector. For third-party behaviour (`ord`, `eth_abi`, Aave), compare with its source or a run of it, never with memory.
+2. **Decoders never panic.** Checked arithmetic, typed errors, and a fuzz target per decoder.
+3. **No allocation in row paths**, except a non-constant schema column in DuckDB (see §3). Anything else that needs an allocator belongs in `bind`.
+4. **One error set per module, mapped to NULL at the target layer.** Libraries return typed errors.
+5. **Feature flags stay at the edges.** Only `root.zig` files read `build_options`.
+6. **Every PRD requirement ID maps to a test name.** `scripts/req_coverage.sh` enforces it.
+7. **Every bug found gets a regression test that fails first.**
+8. **Done means `make verify` passes.**
+9. **Keep reference tools out of the product.** They live under `tools/reference/` with lockfiles. The library itself stays zero-dependency.
 
-## 3. Parallelisation guide for agent teams
+---
 
-| Lane | Owner scope (files it may edit) | Depends on |
-|------|--------------------------------|------------|
-| Foundation | `build.zig`, `core/**`, CI, scripts | none |
-| A: EVM | `src/chains/evm/**` | M0, M1 |
-| B: SVM | `src/chains/svm/**` | M0, M1 |
-| C: Move | `src/chains/move/**` | M0, M1 |
-| D: UTXO/Cosmos | `src/chains/{utxo,cosmos}/**` | M0, M1 |
-| E: Protocols | `src/protocols/**` | M1.1 |
-| Targets | `src/targets/**`, `src/*_main.zig`, `scripts/` | stable lane APIs |
+## 3. Decisions already in force
 
-Rules: a lane never edits another lane's directory; if it needs a core change, open it as a Foundation task. Merge order: Foundation → lanes (any order) → Targets. Each task ends with `zig build test` in the default and `-Dchains=none -Dprotocols=none` configurations.
+Reversing any of these is a change to the design, not a cleanup.
 
-## 4. Risks
+- **Base58** uses 58^5 limbs and a 1280-byte bound, because real Solana instruction data exceeds 128 bytes.
+- **DuckDB** bindings come from `b.addTranslateC` over the vendored headers, pinned to C API v1.5.6.
+- **WASM exports** are `(argv, argc, out, cap)`, since most functions take several arguments.
+- **Warehouse functions carry only their own code.** `sql_gen` links one object once per function, so a body is 40 KB at most. Snowflake is always inline. BigQuery is inline up to 32,000 bytes, and uses the GCS bundle above that.
+- **A non-constant schema column** allocates from a per-chunk arena when its value changes. Bind cannot see those schemas, and a fixed buffer returned `NULL` for ordinary IDLs. Constant schemas and all decoding stay allocation-free.
+- **A row whose result exceeds 64 KB** retries on a heap buffer of up to 16 MB in DuckDB. Valid rows must not look malformed, and ordinary rows never take this path.
+- **`std.json`-based functions are native-only**, so they stay out of the WASM size budget.
 
-- **Zig 0.17 std churn:** API names (`std.process.Init`, `std.testing.fuzz`, `std.Io`) may shift; pin the toolchain in CI and `.zigversion`.
-- **DuckDB C-API stability:** pin the API version in the extension footer; test against the two latest DuckDB releases.
-- **WASM size:** `u512` division and `std.json` can blow the 250 KB budget; keep JSON ABI parsing out of the WASM build unless the size gate allows it.
-- **Warehouse limits:** BigQuery/Snowflake UDF payload and memory limits are not constants: re-verify before M7.8.
-- **Throughput claims:** the §6 targets are unproven on this hardware; M8.1 may adjust them rather than the code.
+---
+
+## 4. Local work
+
+Proven on this machine. All done. Items that cannot be done here say so and moved to §5.
+
+### L1: Run it on every host we can reach
+
+- [x] L1.1 Native Windows: the release artifact passes `scripts/test_duckdb.py` in Windows Python (3,986 calls), including C++ exceptions crossing Zig frames.
+- [x] L1.2 `linux_arm64` release artifact passes the same script under Docker emulation.
+- [x] L1.3 `linux_amd64_musl`, `linux_arm64_musl` and `windows_arm64` build and ship. Unit tests pass on musl, and Alpine's loader resolves both musl artifacts. Running inside DuckDB moved to H3.
+- [x] L1.4 Loaded in a clean Debian bullseye container (glibc 2.31). The extension needs only `GLIBC_2.2.5` symbols.
+- [x] L1.5 Version policy in `CONTRIBUTING.md`. The pre-release run moved to H3.
+
+### L2: Long runs
+
+- [x] L2.1 One hour per lane under ReleaseSafe, mirroring `nightly-fuzz.yml`: about 1.3 billion runs, no crash or hang. The decoders changed since then got 30 minutes each on the final tree, clean: 237 million runs on SVM, 412 million on protocols. The others are unchanged.
+- [x] L2.2 Differential: `tools/reference/wasm_diff.py` mutates every recorded call, and native, the WASM bundle and each per-function module must agree: 99,626 mutated calls across 82 functions, 46% of them `NULL`.
+- [x] L2.3 Soak: 30 minutes of multi-threaded scans, 328 in all. RSS peaked at 208 MB after warm-up and 213 MB in the second half, so no leak.
+
+### L3: Generated data against reference implementations
+
+Stands in for real data and cannot replace it: generators produce what their authors expected, so H6 stays necessary.
+
+- [x] L3.1 **EVM:** 100,000 valid cases identical to `eth_abi`. Of 100,000 mutated, all differences sampled are padding or in-range overlapping offsets, which `docs/LIMITS.md` documents as policy. No dirty value is accepted.
+- [x] L3.2 **Bitcoin:** 200,000 scripts with no disagreement against a Python port of `ord`. The real `ord` moved to H6.
+- [x] L3.3 **CLMM:** every tick against Uniswap, Orca and Raydium source, forward and inverse. Cetus is not verified to the last digit.
+- [x] L3.4 **Lending:** 200,000 cases each against constants and formulas from Aave and Compound source. Separate functions cover Aave's v3.4+ and legacy formulas.
+- [x] L3.5 **Solana:** every item in 7 public IDLs resolves on zero-filled data, after adding `hashMap`, sets and Shank discriminants. Real Metaplex accounts carry no Anchor discriminator, see `docs/LIMITS.md`. No IDL surveyed uses generics, so those stay unsupported. Generated Borsh against a spec encoder.
+- [x] L3.6 **Move:** generated BCS against a spec encoder. SDK comparison moved to H6.
+- [x] L3.7 **Cosmos:** moved to H6, needs `cosmjs`. Known answers remain in `scripts/test_duckdb.py`.
+- [x] L3.8 **Mainnet sample:** pinned real data from 6 chains, replayed by `make verify` against `eth_abi`, contract views and node output. Exact on Aave, Compound and every tick, including Cetus. Found four real gaps, now fixed: SPL coverage, `emit_cpi` events, trailing bytes and Metaplex accounts. See `docs/HANDOFF.md`.
+
+### L4: Hardening
+
+- [x] L4.1 Valid rows over 64 KB retry on a heap buffer of up to 16 MB.
+- [x] L4.2 `<name>_error` twins say why a row is `NULL`.
+- [x] L4.3 Schema column cache bounded at 16 entries and 4 MB per schema, and measured.
+- [x] L4.4 `Resolver` uses a hash map, tested on a chain of 20,000 types.
+- [x] L4.5 Base58 worst row measured: about 200 microseconds at 1280 bytes.
+- [x] L4.6 NUL in a constant schema documented in `docs/LIMITS.md`. It is a query author's mistake, so not worth widening the C API use.
+- [x] L4.7 REQ-DUCK-03 proven by a zero-row bind test.
+- [x] L4.8 Threat model and support policy in `SECURITY.md`.
+
+### L5: Release, without GitHub
+
+- [x] L5.1 `scripts/release.sh` runs every gate, then builds eight platforms, the full WASM bundle and checksums. `release.yml` is a thin wrapper.
+- [x] L5.2 Run here, and each artifact we can run was installed on a clean host. See L1.
+- [x] L5.3 Workflow actions pinned to commit SHAs, each confirmed to exist upstream. `actionlint` runs in `make verify`.
+- [x] L5.4 The Linux steps of `ci.yml` pass from a clean copy of only what git tracks, with empty build caches.
+
+### L6: Warehouse dress rehearsal
+
+- [x] L6.1 BigQuery and Snowflake JavaScript run in a stripped context with no `TextEncoder` or `atob`, fresh per call for Snowflake (`scripts/test_snowflake.mjs`). Offline SQL parsing moved to H3's skipped list.
+- [x] L6.2 In V8: about 1 ms cold start and 2 to 4 microseconds per warm row. Bodies are 40 KB at most and 1 MB in total, down from 294 KB each and 24 MB. `test_snowflake.mjs` fails above 100 KB.
+- [x] L6.3 77 of 82 BigQuery functions are inline, and each runs alone against every recorded call.
+
+### L7: The 1.0 surface
+
+- [x] L7.1 JSON outputs specified in `docs/LIMITS.md`, each checked against the build. API candidates are below.
+- [x] L7.2 `web3_version()`.
+- [x] L7.3 Stability policy, supported versions, `CHANGELOG.md`, `CONTRIBUTING.md`.
+- [x] L7.4 Limits page and `NULL` troubleshooting. Examples per function remain the catalogue's docs and `scripts/test_duckdb.py`.
+- [x] L7.5 `examples/dbt-duckdb`: moved to H3's skipped list, needs `dbt-duckdb`.
+- [x] L7.6 10M synthetic Parquet rows: 30x Python per thread, 200x on 20 threads, see `docs/PERF.md`. A regression check waits for H9, since this host varies too much.
+- [x] L7.7 `make verify` runs everything in one command, in about 7 minutes once reference sources are cached.
+
+### API decisions
+
+Settled while renames were free, and listed in `CHANGELOG.md`:
+
+- `web3_uni_amount0_delta` and `web3_uni_amount1_delta` take `round_up` as BOOLEAN.
+- No function has a `_json` suffix. Decoders return JSON.
+- `web3_i256_from_bytes` takes up to 32 bytes and sign-extends.
+- `web3_sol_pda` keeps comma-separated hex seeds: WASM has no list type, and one signature across hosts is worth more than a nicer DuckDB call.
+
+---
+
+## 5. Handoff
+
+Needs people, accounts or hardware this project does not have. [`docs/HANDOFF.md`](docs/HANDOFF.md) has the exact commands and completion test for each.
+
+- [ ] H1 **GitHub:** push, and get `ci.yml` and `nightly-fuzz.yml` green.
+- [ ] H2 **macOS:** load and test both builds.
+- [ ] H3 **Other artifacts:** musl and `windows_arm64` runtime, newest DuckDB pre-release, and the steps skipped locally.
+- [ ] H4 **BigQuery:** deploy, replay, a million-row query with malformed rows.
+- [ ] H5 **Snowflake:** test one `CREATE` first.
+- [ ] H6 **Real data:** millions of real rows per chain against independent decoders, with every `NULL` class explained.
+- [ ] H7 **Signed distribution** through `duckdb/community-extensions`.
+- [ ] H8 **Independent security review.**
+- [ ] H9 **Dedicated-hardware benchmarks.**
+- [ ] H10 **Outside users** on real pipelines, then 1.0.
+
+---
+
+## 6. Risks
+
+- **Warehouse rejection:** Snowflake's sandbox may not expose `WebAssembly`, which no local test can show. H5 starts with a one-line probe, and names the next design to try.
+- **Community extensions:** if their CI cannot build Zig, signed distribution needs another route.
+- **Zig 0.17 churn:** stay pinned in CI and `.zigversion`, and upgrade deliberately.
+- **Small samples flatter us:** generated data shares its authors' assumptions, and the mainnet sample is thousands of rows from a handful of blocks. It found four gaps, so expect H6 to find more.

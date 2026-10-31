@@ -9,6 +9,10 @@ const Function = catalog.Function;
 /// Pinned stable C-API version; must match the vendored header and the footer in build.zig.
 const API_VERSION = "v1.5.6";
 const ROW_OUTPUT_LIMIT = 64 * 1024;
+const LARGE_OUTPUT_SIZES = [_]usize{ 1024 * 1024, 16 * 1024 * 1024 };
+const SCHEMA_CACHE_ENTRIES = 16;
+/// Parsed IDLs take many times their text, and this is per worker thread.
+const MAX_SCHEMA_COLUMN_LEN = 4 * 1024 * 1024;
 
 /// A copy, as in DUCKDB_EXTENSION_API_INIT: `get_api` returns memory that only lives during init.
 var api: c.duckdb_ext_api_v1 = undefined;
@@ -85,75 +89,123 @@ const Column = struct {
         return switch (self.kind) {
             .bytes, .text => .{ .bytes = stringBytes(&@as([*]c.duckdb_string_t, @ptrCast(@alignCast(self.data)))[row]) },
             .int => .{ .int = @as([*]i64, @ptrCast(@alignCast(self.data)))[row] },
+            .boolean => .{ .int = @intFromBool(@as([*]bool, @ptrCast(self.data))[row]) },
         };
     }
 };
 
-/// Per-chunk cache for a non-constant schema column: rows usually repeat one value. Only this path
-/// allocates during execute: bind never sees these schemas, and real IDLs run to hundreds of KB.
+/// Per-chunk cache for a non-constant schema column. Holds several, since a join against a table of
+/// IDLs interleaves programs, and failures, since a bad schema would otherwise reparse on every row.
+/// Only this path allocates during execute: bind never sees these schemas, and real IDLs run to
+/// hundreds of KB.
 const SchemaCache = struct {
-    key: []const u8 = "",
-    schema: ?*const anyopaque = null,
+    entries: [SCHEMA_CACHE_ENTRIES]struct { key: []const u8, result: catalog.CallError!*const anyopaque } = undefined,
+    len: usize = 0,
     arena: std.heap.ArenaAllocator,
 
     fn get(self: *SchemaCache, function: *const Function, text: []const u8) catalog.CallError!*const anyopaque {
-        if (self.schema) |s| {
-            if (std.mem.eql(u8, self.key, text)) return s;
+        for (self.entries[0..self.len]) |e| {
+            if (std.mem.eql(u8, e.key, text)) return e.result;
         }
-        _ = self.arena.reset(.retain_capacity);
-        self.schema = null;
-        const s = try function.prepared.?.prepare(self.arena.allocator(), text);
-        self.key = text;
-        self.schema = s;
-        return s;
+        if (text.len > MAX_SCHEMA_COLUMN_LEN) return error.SchemaTooLarge;
+        if (self.len == self.entries.len) {
+            _ = self.arena.reset(.retain_capacity);
+            self.len = 0;
+        }
+        const result = function.prepared.?.prepare(self.arena.allocator(), text);
+        self.entries[self.len] = .{ .key = text, .result = result };
+        self.len += 1;
+        return result;
     }
 };
 
+fn callRow(function: *const Function, schema: ?*const anyopaque, args: []const catalog.Arg, dest: []u8) catalog.CallError!catalog.Out {
+    if (schema) |s| return function.prepared.?.call(s, args[1..], dest);
+    return function.call(args, dest);
+}
+
+/// A valid row that outgrew the stack buffer, which should be rare: contract creation calldata or a
+/// huge account. Off the normal path, so ordinary rows stay allocation-free.
+fn callLarge(heap: *[]u8, function: *const Function, schema: ?*const anyopaque, args: []const catalog.Arg) catalog.CallError!catalog.Out {
+    for (LARGE_OUTPUT_SIZES) |size| {
+        if (heap.len < size) {
+            std.heap.page_allocator.free(heap.*);
+            heap.* = &.{};
+            heap.* = try std.heap.page_allocator.alloc(u8, size);
+        }
+        const result = callRow(function, schema, args, heap.*);
+        if (result) |_| return result else |e| if (e != error.BufferTooSmall) return result;
+    }
+    return error.BufferTooSmall;
+}
+
 /// REQ-DUCK-02 / REQ-DUCK-04: one tight loop per chunk; NULL in or any error gives NULL out.
-fn execute(info: c.duckdb_function_info, input: c.duckdb_data_chunk, output: c.duckdb_vector) callconv(.c) void {
-    const function: *const Function = @ptrCast(@alignCast(api.duckdb_scalar_function_get_extra_info.?(info)));
-    const rows = api.duckdb_data_chunk_get_size.?(input);
-    const bound: ?*BindState = if (function.prepared != null) @ptrCast(@alignCast(api.duckdb_scalar_function_get_bind_data.?(info))) else null;
+/// With `explain`, the same loop reports why: NULL for a good row, the error's name for a bad one.
+fn Executor(comptime explain: bool) type {
+    return struct {
+        fn execute(info: c.duckdb_function_info, input: c.duckdb_data_chunk, output: c.duckdb_vector) callconv(.c) void {
+            const function: *const Function = @ptrCast(@alignCast(api.duckdb_scalar_function_get_extra_info.?(info)));
+            const rows = api.duckdb_data_chunk_get_size.?(input);
+            const bound: ?*BindState = if (function.prepared != null) @ptrCast(@alignCast(api.duckdb_scalar_function_get_bind_data.?(info))) else null;
 
-    var columns: [8]Column = undefined;
-    const argc = function.args.len;
-    for (function.args, 0..) |kind, i| {
-        const vec = api.duckdb_data_chunk_get_vector.?(input, i);
-        columns[i] = .{ .data = api.duckdb_vector_get_data.?(vec), .validity = api.duckdb_vector_get_validity.?(vec), .kind = kind };
-    }
-
-    api.duckdb_vector_ensure_validity_writable.?(output);
-    const out_validity = api.duckdb_vector_get_validity.?(output);
-    const out_data = api.duckdb_vector_get_data.?(output);
-
-    var scratch: [ROW_OUTPUT_LIMIT]u8 = undefined;
-    var cache: SchemaCache = .{ .arena = .init(std.heap.page_allocator) };
-    defer cache.arena.deinit();
-    var args: [8]catalog.Arg = undefined;
-
-    rows: for (0..rows) |row| {
-        for (columns[0..argc], 0..) |col, i| {
-            if (!col.isValid(row)) {
-                api.duckdb_validity_set_row_invalid.?(out_validity, row);
-                continue :rows;
+            var columns: [8]Column = undefined;
+            const argc = function.args.len;
+            for (function.args, 0..) |kind, i| {
+                const vec = api.duckdb_data_chunk_get_vector.?(input, i);
+                columns[i] = .{ .data = api.duckdb_vector_get_data.?(vec), .validity = api.duckdb_vector_get_validity.?(vec), .kind = kind };
             }
-            args[i] = col.get(row);
+
+            api.duckdb_vector_ensure_validity_writable.?(output);
+            const out_validity = api.duckdb_vector_get_validity.?(output);
+            const out_data = api.duckdb_vector_get_data.?(output);
+
+            var scratch: [ROW_OUTPUT_LIMIT]u8 = undefined;
+            var heap: []u8 = &.{};
+            defer std.heap.page_allocator.free(heap);
+            var cache: SchemaCache = .{ .arena = .init(std.heap.page_allocator) };
+            defer cache.arena.deinit();
+            var args: [8]catalog.Arg = undefined;
+
+            rows: for (0..rows) |row| {
+                for (columns[0..argc], 0..) |col, i| {
+                    if (!col.isValid(row)) {
+                        api.duckdb_validity_set_row_invalid.?(out_validity, row);
+                        continue :rows;
+                    }
+                    args[i] = col.get(row);
+                }
+                const result: catalog.CallError!catalog.Out = blk: {
+                    const schema: ?*const anyopaque = if (function.prepared == null)
+                        null
+                    else if (bound) |b|
+                        b.schema
+                    else
+                        cache.get(function, args[0].bytes) catch |e| break :blk e;
+                    const first = callRow(function, schema, args[0..argc], &scratch);
+                    if (first) |_| break :blk first else |e| if (e != error.BufferTooSmall) break :blk first;
+                    break :blk callLarge(&heap, function, schema, args[0..argc]);
+                };
+                if (explain) {
+                    if (result) |_| {
+                        api.duckdb_validity_set_row_invalid.?(out_validity, row);
+                    } else |e| {
+                        const name = @errorName(e);
+                        api.duckdb_vector_assign_string_element_len.?(output, row, name.ptr, name.len);
+                    }
+                    continue;
+                }
+                const value = result catch {
+                    api.duckdb_validity_set_row_invalid.?(out_validity, row);
+                    continue;
+                };
+                switch (function.ret) {
+                    .bytes, .text => api.duckdb_vector_assign_string_element_len.?(output, row, value.bytes.ptr, value.bytes.len),
+                    .boolean => @as([*]bool, @ptrCast(out_data))[row] = value.boolean,
+                    .int => @as([*]i64, @ptrCast(@alignCast(out_data)))[row] = value.int,
+                }
+            }
         }
-        const result = if (function.prepared) |p| blk: {
-            if (bound) |b| break :blk p.call(b.schema, args[1..argc], &scratch);
-            const schema = cache.get(function, args[0].bytes) catch |e| break :blk @as(catalog.CallError!catalog.Out, e);
-            break :blk p.call(schema, args[1..argc], &scratch);
-        } else function.call(args[0..argc], &scratch);
-        const value = result catch {
-            api.duckdb_validity_set_row_invalid.?(out_validity, row);
-            continue;
-        };
-        switch (function.ret) {
-            .bytes, .text => api.duckdb_vector_assign_string_element_len.?(output, row, value.bytes.ptr, value.bytes.len),
-            .boolean => @as([*]bool, @ptrCast(out_data))[row] = value.boolean,
-            .int => @as([*]i64, @ptrCast(@alignCast(out_data)))[row] = value.int,
-        }
-    }
+    };
 }
 
 fn logicalType(kind: anytype) c.duckdb_logical_type {
@@ -165,20 +217,22 @@ fn logicalType(kind: anytype) c.duckdb_logical_type {
     return api.duckdb_create_logical_type.?(t);
 }
 
-fn register(conn: c.duckdb_connection, function: *const Function) bool {
+fn register(conn: c.duckdb_connection, function: *const Function, comptime explain: bool) bool {
+    var name_buf: [128]u8 = undefined;
+    const name = std.fmt.bufPrint(&name_buf, "{s}{s}\x00", .{ function.name, if (explain) "_error" else "" }) catch return false;
     var f = api.duckdb_create_scalar_function.?();
     defer api.duckdb_destroy_scalar_function.?(&f);
-    api.duckdb_scalar_function_set_name.?(f, function.name.ptr);
+    api.duckdb_scalar_function_set_name.?(f, name.ptr);
     for (function.args) |kind| {
         var t = logicalType(kind);
         api.duckdb_scalar_function_add_parameter.?(f, t);
         api.duckdb_destroy_logical_type.?(&t);
     }
-    var ret = logicalType(function.ret);
+    var ret = if (explain) logicalType(catalog.RetType.text) else logicalType(function.ret);
     api.duckdb_scalar_function_set_return_type.?(f, ret);
     api.duckdb_destroy_logical_type.?(&ret);
     api.duckdb_scalar_function_set_extra_info.?(f, @constCast(function), null);
-    api.duckdb_scalar_function_set_function.?(f, execute);
+    api.duckdb_scalar_function_set_function.?(f, Executor(explain).execute);
     if (function.prepared != null) api.duckdb_scalar_function_set_bind.?(f, bind);
     return api.duckdb_register_scalar_function.?(conn, f) == c.DuckDBSuccess;
 }
@@ -194,7 +248,7 @@ export fn web3_init_c_api(info: c.duckdb_extension_info, access: *c.struct_duckd
     }
     defer api.duckdb_disconnect.?(&conn);
     for (web3sql.targets.functions) |*function| {
-        if (!register(conn, function)) {
+        if (!register(conn, function, false) or !register(conn, function, true)) {
             access.set_error.?(info, "web3: function registration failed");
             return false;
         }

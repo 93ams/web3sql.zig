@@ -10,3 +10,5 @@ zig-out/
 
 dist/
 .venv/
+release/
+__pycache__/

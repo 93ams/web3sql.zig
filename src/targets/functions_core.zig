@@ -44,8 +44,11 @@ fn u256FromBytes(data: []const u8, dest: []u8) (error{InvalidLength} || math.Mat
     return math.formatDecimal(try bigEndianWord(data), dest);
 }
 fn i256FromBytes(data: []const u8, dest: []u8) (error{InvalidLength} || math.MathError)![]const u8 {
-    if (data.len != 32) return error.InvalidLength;
-    return math.formatDecimalSigned(@bitCast(try bigEndianWord(data)), dest);
+    if (data.len == 0) return error.InvalidLength;
+    const word = try bigEndianWord(data);
+    const unused: u8 = @intCast(256 - 8 * data.len); // sign-extends a value shorter than 32 bytes
+    const signed: i256 = @bitCast(word << unused);
+    return math.formatDecimalSigned(signed >> unused, dest);
 }
 fn u256ToBytes(text: []const u8, dest: []u8) (error{BufferTooSmall} || math.MathError)![]const u8 {
     if (dest.len < 32) return error.BufferTooSmall;
@@ -56,7 +59,12 @@ fn mulDivDecimal(a: []const u8, b: []const u8, c: []const u8, dest: []u8) math.M
     return math.formatDecimal(try math.mulDiv(try math.parseDecimal(a), try math.parseDecimal(b), try math.parseDecimal(c)), dest);
 }
 
+fn version() []const u8 {
+    return @import("root.zig").version;
+}
+
 pub const entries = [_]catalog.Function{
+    func("web3_version", "Version of this build", &.{}, .text, version),
     func("web3_keccak256", "Keccak-256 digest", &.{.bytes}, .bytes, digestFn(32, core.crypto.keccak.hash)),
     func("web3_sha256", "SHA-256 digest", &.{.bytes}, .bytes, digestFn(32, core.crypto.sha256.hash)),
     func("web3_sha256d", "Double SHA-256 digest", &.{.bytes}, .bytes, digestFn(32, core.crypto.sha256.doubleHash)),
@@ -75,7 +83,7 @@ pub const entries = [_]catalog.Function{
     func("web3_base64url_encode", "Base64URL without padding", &.{.bytes}, .text, base64Url),
     func("web3_base64url_decode", "Bytes from unpadded Base64URL", &.{.text}, .bytes, base64UrlDecode),
     func("web3_u256_from_bytes", "Decimal from up to 32 big-endian bytes", &.{.bytes}, .text, u256FromBytes),
-    func("web3_i256_from_bytes", "Signed decimal from 32 big-endian bytes", &.{.bytes}, .text, i256FromBytes),
+    func("web3_i256_from_bytes", "Signed decimal from up to 32 big-endian bytes, sign-extended", &.{.bytes}, .text, i256FromBytes),
     func("web3_u256_to_bytes", "32 big-endian bytes from decimal", &.{.text}, .bytes, u256ToBytes),
     func("web3_mul_div", "floor(a*b/c) on decimal strings at 512-bit precision", &.{ .text, .text, .text }, .text, mulDivDecimal),
 };

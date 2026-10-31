@@ -1,11 +1,11 @@
-# Descriptor for duckdb/community-extensions (M8.5). Submit as extensions/web3/description.yml.
+# Descriptor for duckdb/community-extensions. Submit as extensions/web3/description.yml.
 extension:
   name: web3
   description: Blockchain decoding and high-precision DeFi math
   version: 0.1.0
   language: Zig
   build: custom
-  license: UNSET
+  license: MIT
   maintainers:
     - 93ams
 

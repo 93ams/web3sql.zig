@@ -2,25 +2,24 @@ name: release
 on:
   push:
     tags: ["v*"]
+permissions:
+  contents: write
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: mlugg/setup-zig@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
         with:
           version: 0.17.0
-      - name: Cross-compile
-        run: |
-          mkdir release
-          for t in x86_64-linux-gnu:linux_amd64 aarch64-linux-gnu:linux_arm64 x86_64-macos:osx_amd64 aarch64-macos:osx_arm64 x86_64-windows-gnu:windows_amd64; do
-            target=${t%%:*}; platform=${t##*:}
-            zig build duckdb -Dtarget=$target -Doptimize=fast -p out/$platform
-            cp out/$platform/bin/web3.duckdb_extension release/web3.$platform.duckdb_extension
-          done
-          zig build wasm -Dchains=evm,svm -Dprotocols=clmm,tokens -p out/wasm
-          zig build wasm-size -Dchains=evm,svm -Dprotocols=clmm,tokens
-          cp out/wasm/bin/web3_sql.wasm dist/* release/
-      - uses: softprops/action-gh-release@v2
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.13"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: lts/*
+      - run: pip install -r scripts/requirements-dev.txt
+      - run: sh scripts/release.sh
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           files: release/*

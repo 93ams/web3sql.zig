@@ -1,16 +1,18 @@
 //! The SQL function table. DuckDB, WASM and the SQL generators all read this, so they cannot drift.
 const std = @import("std");
 
-/// SQL-facing argument kinds: BLOB, VARCHAR and BIGINT in DuckDB.
-pub const ArgType = enum { bytes, text, int };
+/// SQL-facing argument kinds: BLOB, VARCHAR, BIGINT and BOOLEAN in DuckDB.
+pub const ArgType = enum { bytes, text, int, boolean };
 /// SQL-facing return kinds: BLOB, VARCHAR, BOOLEAN and BIGINT in DuckDB.
 pub const RetType = enum { bytes, text, boolean, int };
 
+/// A `boolean` argument arrives as `int`, 0 or 1.
 pub const Arg = union { bytes: []const u8, int: i64 };
 pub const Out = union { bytes: []const u8, boolean: bool, int: i64 };
 
-/// Every library error becomes this at the target layer, which maps it to SQL NULL (REQ-DUCK-04).
-pub const CallError = error{Failed};
+/// Library errors pass through unchanged. Targets map them to SQL NULL (REQ-DUCK-04), except that
+/// DuckDB retries `BufferTooSmall` on a larger buffer and reports the name through `<name>_error`.
+pub const CallError = anyerror;
 
 pub const Function = struct {
     name: [:0]const u8,
@@ -42,7 +44,7 @@ fn toOut(value: anytype, comptime ret: RetType) CallError!Out {
     return switch (ret) {
         .bytes, .text => .{ .bytes = value },
         .boolean => .{ .boolean = value },
-        .int => .{ .int = std.math.cast(i64, value) orelse return error.Failed },
+        .int => .{ .int = std.math.cast(i64, value) orelse return error.ResultOutOfRange },
     };
 }
 
@@ -65,13 +67,13 @@ fn Adapter(comptime impl: anytype, comptime skip: usize, comptime ret: RetType) 
                 } else if (T == bool) {
                     tuple[i] = args[i - skip].int != 0;
                 } else if (@typeInfo(T) == .int) {
-                    tuple[i] = std.math.cast(T, args[i - skip].int) orelse return error.Failed;
+                    tuple[i] = std.math.cast(T, args[i - skip].int) orelse return error.ArgumentOutOfRange;
                 } else {
                     @compileError("unsupported catalogue parameter type " ++ @typeName(T));
                 }
             }
             const result = @call(.auto, impl, tuple);
-            const value = if (@typeInfo(@TypeOf(result)) == .error_union) (result catch return error.Failed) else result;
+            const value = if (@typeInfo(@TypeOf(result)) == .error_union) try result else result;
             return toOut(value, ret);
         }
         fn call(args: []const Arg, dest: []u8) CallError!Out {
@@ -91,8 +93,7 @@ pub fn schemaFunc(comptime name: [:0]const u8, comptime doc: []const u8, comptim
     const Ptr = ReturnPayload(@TypeOf(parse));
     const S = struct {
         fn prepare(gpa: std.mem.Allocator, schema: []const u8) CallError!*const anyopaque {
-            const p: Ptr = parse(gpa, schema) catch return error.Failed;
-            return @ptrCast(p);
+            return @ptrCast(try parse(gpa, schema));
         }
         fn prepared(schema: *const anyopaque, row: []const Arg, dest: []u8) CallError!Out {
             const p: Ptr = @ptrCast(@alignCast(schema));
@@ -136,6 +137,6 @@ test "catalog adapter maps params and errors" {
     var buf: [4]u8 = undefined;
     const out = try entry.call(&.{ .{ .bytes = "a" }, .{ .int = 1 } }, &buf);
     try std.testing.expectEqualStrings("b", out.bytes);
-    try std.testing.expectError(error.Failed, entry.call(&.{ .{ .bytes = "a" }, .{ .int = 0 } }, &buf));
-    try std.testing.expectError(error.Failed, entry.call(&.{ .{ .bytes = "a" }, .{ .int = 300 } }, &buf));
+    try std.testing.expectError(error.Bad, entry.call(&.{ .{ .bytes = "a" }, .{ .int = 0 } }, &buf));
+    try std.testing.expectError(error.ArgumentOutOfRange, entry.call(&.{ .{ .bytes = "a" }, .{ .int = 300 } }, &buf));
 }

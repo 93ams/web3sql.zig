@@ -16,6 +16,8 @@ const sections = [_]struct { enabled: bool, path: type }{
     .{ .enabled = build_options.protocol_lending, .path = if (build_options.protocol_lending) @import("functions_lending.zig") else void },
 };
 
+pub const version = build_options.version;
+
 /// Every function enabled by the build flags.
 pub const functions: []const catalog.Function = blk: {
     @setEvalBranchQuota(100_000);
@@ -53,7 +55,7 @@ test "REQ-DUCK-04 every catalogue function survives hostile arguments and tiny b
     for (functions) |f| {
         for (0..2_000) |_| {
             for (f.args, 0..) |kind, i| {
-                if (kind == .int) {
+                if (kind == .int or kind == .boolean) {
                     args[i] = .{ .int = @bitCast(rand.int(u64) >> rand.int(u6)) };
                     continue;
                 }
@@ -74,6 +76,6 @@ test "row calls take no allocator; schema parsing fails cleanly with none availa
     var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 0 });
     for (functions) |f| {
         const p = f.prepared orelse continue;
-        try std.testing.expectError(error.Failed, p.prepare(failing.allocator(), "{a:u8}"));
+        try std.testing.expectError(error.OutOfMemory, p.prepare(failing.allocator(), "{a:u8}"));
     }
 }

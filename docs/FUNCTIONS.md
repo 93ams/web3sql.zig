@@ -1,10 +1,11 @@
 # SQL functions
 
-Generated from the function catalogue by `zig build docs`. Any malformed row returns `NULL`, and so does a valid row whose result exceeds 64 KB in DuckDB, or the 60 KB shared by arguments and result in WASM.
+Generated from the function catalogue by `zig build docs`. Any malformed row returns `NULL`, and so does a valid row whose result exceeds 16 MB in DuckDB, or the 60 KB shared by arguments and result in WASM. In DuckDB, each function also has a `<name>_error` twin taking the same arguments, which returns `NULL` for a good row and the reason for a bad one. Reason names may change between releases.
 Types are DuckDB's. Functions marked *DuckDB only* parse JSON, and are left out of the WASM bundle to fit its size budget.
 
 | Function | Returns | Description |
 |---|---|---|
+| `web3_version()` | VARCHAR | Version of this build |
 | `web3_keccak256(BLOB)` | BLOB | Keccak-256 digest |
 | `web3_sha256(BLOB)` | BLOB | SHA-256 digest |
 | `web3_sha256d(BLOB)` | BLOB | Double SHA-256 digest |
@@ -23,7 +24,7 @@ Types are DuckDB's. Functions marked *DuckDB only* parse JSON, and are left out 
 | `web3_base64url_encode(BLOB)` | VARCHAR | Base64URL without padding |
 | `web3_base64url_decode(VARCHAR)` | BLOB | Bytes from unpadded Base64URL |
 | `web3_u256_from_bytes(BLOB)` | VARCHAR | Decimal from up to 32 big-endian bytes |
-| `web3_i256_from_bytes(BLOB)` | VARCHAR | Signed decimal from 32 big-endian bytes |
+| `web3_i256_from_bytes(BLOB)` | VARCHAR | Signed decimal from up to 32 big-endian bytes, sign-extended |
 | `web3_u256_to_bytes(VARCHAR)` | BLOB | 32 big-endian bytes from decimal |
 | `web3_mul_div(VARCHAR, VARCHAR, VARCHAR)` | VARCHAR | floor(a*b/c) on decimal strings at 512-bit precision |
 | `web3_evm_checksum_address(BLOB)` | VARCHAR | EIP-55 text of a 20-byte address |
@@ -49,6 +50,7 @@ Types are DuckDB's. Functions marked *DuckDB only* parse JSON, and are left out 
 | `web3_anchor_decode_instruction(VARCHAR, BLOB)` | VARCHAR | JSON from an IDL and instruction data *DuckDB only* |
 | `web3_anchor_decode_event(VARCHAR, BLOB)` | VARCHAR | JSON from an IDL and event data *DuckDB only* |
 | `web3_anchor_decode_account(VARCHAR, BLOB)` | VARCHAR | JSON from an IDL and account data *DuckDB only* |
+| `web3_anchor_decode_account_raw(VARCHAR, VARCHAR, BLOB)` | VARCHAR | JSON from an IDL, an account type name and account data with no discriminator, such as Metaplex's *DuckDB only* |
 | `web3_anchor_decode_event_log(VARCHAR, VARCHAR)` | VARCHAR | JSON from an IDL and a 'Program data:' log line *DuckDB only* |
 | `web3_move_address(VARCHAR)` | VARCHAR | Canonical 32-byte 0x address |
 | `web3_move_address_short(VARCHAR)` | VARCHAR | Aptos display form of an address |
@@ -56,10 +58,10 @@ Types are DuckDB's. Functions marked *DuckDB only* parse JSON, and are left out 
 | `web3_bcs_decode(VARCHAR, BLOB)` | VARCHAR | JSON from BCS bytes and a text schema; strict |
 | `web3_btc_script_type(BLOB)` | VARCHAR | scriptPubKey class, e.g. p2wpkh |
 | `web3_btc_address(VARCHAR, BLOB)` | VARCHAR | Address of a scriptPubKey on a named network |
-| `web3_btc_script_json(VARCHAR, BLOB)` | VARCHAR | Classification and address as JSON |
+| `web3_btc_script(VARCHAR, BLOB)` | VARCHAR | Classification and address as JSON |
 | `web3_btc_op_return(BLOB)` | BLOB | OP_RETURN payload bytes |
-| `web3_btc_runestone_json(BLOB)` | VARCHAR | Runestone tag/value pairs as JSON |
-| `web3_btc_inscription_json(BLOB)` | VARCHAR | Ordinals inscription in a witness script as JSON |
+| `web3_btc_runestone(BLOB)` | VARCHAR | Runestone tag/value pairs as JSON |
+| `web3_btc_inscription(BLOB)` | VARCHAR | Ordinals inscription in a witness script as JSON |
 | `web3_cosmos_convert_hrp(VARCHAR, VARCHAR)` | VARCHAR | Re-encode a Bech32 address under a new prefix |
 | `web3_cosmos_is_valid(VARCHAR)` | BOOLEAN | True for a valid Bech32 address |
 | `web3_ibc_denom(VARCHAR)` | VARCHAR | ibc/<SHA256> hash of a denom trace |
@@ -68,8 +70,8 @@ Types are DuckDB's. Functions marked *DuckDB only* parse JSON, and are left out 
 | `web3_uni_tick_at_sqrt_ratio(VARCHAR)` | BIGINT | Uniswap TickMath.getTickAtSqrtRatio |
 | `web3_uni_sqrt_price_to_price(VARCHAR, BIGINT, BIGINT, BIGINT)` | VARCHAR | Price from sqrtPriceX96 (sqrt, decimals0, decimals1, scale) |
 | `web3_uni_tick_to_price(BIGINT, BIGINT, BIGINT, BIGINT)` | VARCHAR | Price from a tick (tick, decimals0, decimals1, scale) |
-| `web3_uni_amount0_delta(VARCHAR, VARCHAR, VARCHAR, BIGINT)` | VARCHAR | SqrtPriceMath.getAmount0Delta (sqrtA, sqrtB, liquidity, round_up) |
-| `web3_uni_amount1_delta(VARCHAR, VARCHAR, VARCHAR, BIGINT)` | VARCHAR | SqrtPriceMath.getAmount1Delta (sqrtA, sqrtB, liquidity, round_up) |
+| `web3_uni_amount0_delta(VARCHAR, VARCHAR, VARCHAR, BOOLEAN)` | VARCHAR | SqrtPriceMath.getAmount0Delta (sqrtA, sqrtB, liquidity, round_up) |
+| `web3_uni_amount1_delta(VARCHAR, VARCHAR, VARCHAR, BOOLEAN)` | VARCHAR | SqrtPriceMath.getAmount1Delta (sqrtA, sqrtB, liquidity, round_up) |
 | `web3_orca_sqrt_price_from_tick(BIGINT)` | VARCHAR | Orca Q64.64 sqrt price of a tick |
 | `web3_raydium_sqrt_price_from_tick(BIGINT)` | VARCHAR | Raydium Q64.64 sqrt price of a tick |
 | `web3_cetus_sqrt_price_from_tick(BIGINT)` | VARCHAR | Cetus Q64.64 sqrt price of a tick |
@@ -77,8 +79,8 @@ Types are DuckDB's. Functions marked *DuckDB only* parse JSON, and are left out 
 | `web3_raydium_tick_from_sqrt_price(VARCHAR)` | BIGINT | Raydium tick of a Q64.64 sqrt price |
 | `web3_cetus_tick_from_sqrt_price(VARCHAR)` | BIGINT | Cetus tick of a Q64.64 sqrt price |
 | `web3_x64_sqrt_price_to_price(VARCHAR, BIGINT, BIGINT, BIGINT)` | VARCHAR | Price from a Q64.64 sqrt price (sqrt, decimalsA, decimalsB, scale) |
-| `web3_erc_decode_json(BLOB, BLOB)` | VARCHAR | ERC-20/721/1155 Transfer or Approval as JSON (concatenated topics, data) |
-| `web3_spl_decode_json(BLOB)` | VARCHAR | SPL Token instruction as JSON |
+| `web3_erc_decode(BLOB, BLOB)` | VARCHAR | ERC-20/721/1155 Transfer or Approval as JSON (concatenated topics, data) |
+| `web3_spl_decode(BLOB)` | VARCHAR | SPL Token instruction as JSON |
 | `web3_wad_mul(VARCHAR, VARCHAR)` | VARCHAR | Aave wadMul, half up |
 | `web3_wad_div(VARCHAR, VARCHAR)` | VARCHAR | Aave wadDiv, half up |
 | `web3_ray_mul(VARCHAR, VARCHAR)` | VARCHAR | Aave rayMul, half up |

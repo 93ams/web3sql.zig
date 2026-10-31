@@ -3,7 +3,9 @@
 //! the caller's allocator (pass an arena); decoding afterwards allocates nothing.
 //! Handles both IDL generations: legacy (<0.30, `publicKey`, `defined: "X"`, no discriminators)
 //! and current (`pubkey`, `defined: {name}`, explicit `discriminator`).
-//! shortcut: generics, hashMap/hashSet and coption are rejected with UnsupportedType; add when a real IDL needs them.
+//! Also reads Shank IDLs (Metaplex), whose instructions carry a one-byte `discriminant`.
+//! shortcut: generics and coption are rejected with UnsupportedType. None of seven large public IDLs
+//! use them (see tools/reference/idl_corpus.py); add when a real IDL needs them.
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Value = std.json.Value;
@@ -25,7 +27,7 @@ pub const IdlError = Allocator.Error || error{
     NameTooLong,
 };
 
-pub const DecodeError = borsh.BorshError || anchor.AnchorError || error{ UnknownDiscriminator, UnsupportedType };
+pub const DecodeError = borsh.BorshError || anchor.AnchorError || error{ UnknownDiscriminator, UnknownAccount, UnsupportedType };
 
 pub const MAX_JSON_DEPTH = 64;
 /// A struct costs the resolver at most two levels for each one it costs the decoder.
@@ -48,7 +50,8 @@ pub const Idl = struct {
             else => error.InvalidJson,
         };
         if (root != .object) return error.InvalidJson;
-        var res = Resolver{ .a = a, .defs = try collectDefs(a, root.object.get("types"), root.object.get("accounts")) };
+        const defs = try collectDefs(a, root.object.get("types"), root.object.get("accounts"));
+        var res = Resolver{ .a = a, .defs = defs, .index = try indexDefs(a, defs) };
         return .{
             .instructions = try res.items(root.object.get("instructions"), "global", .instruction),
             .accounts = try res.items(root.object.get("accounts"), "account", .account),
@@ -56,19 +59,31 @@ pub const Idl = struct {
         };
     }
 
-    /// `{"name":...,"data":{...}}` for instruction data (8-byte discriminator + Borsh args); no trailing bytes allowed.
+    /// `{"name":...,"data":{...}}` for instruction data (8-byte discriminator + Borsh args). As in
+    /// Anchor's handlers and client, trailing bytes are ignored, so a stale IDL still decodes.
     pub fn decodeInstruction(self: Idl, data: []const u8, dest: []u8) DecodeError![]const u8 {
-        return decodeItem(self.instructions, data, dest, true);
+        return decodeItem(self.instructions, data, dest);
     }
 
-    /// Same for an Anchor event payload (discriminator + Borsh), e.g. from `anchor.decodeProgramData`.
+    /// Same for an Anchor event payload (discriminator + Borsh), from `anchor.decodeProgramData` or
+    /// an `emit_cpi!` self-invocation, whose instruction data carries a tag in front.
     pub fn decodeEvent(self: Idl, data: []const u8, dest: []u8) DecodeError![]const u8 {
-        return decodeItem(self.events, data, dest, true);
+        const payload = if (std.mem.startsWith(u8, data, &EVENT_IX_TAG)) data[EVENT_IX_TAG.len..] else data;
+        return decodeItem(self.events, payload, dest);
     }
 
-    /// Account data may be zero padded to the allocated size, so trailing bytes are ignored.
+    /// Account data may also be zero padded to the allocated size.
     pub fn decodeAccount(self: Idl, data: []const u8, dest: []u8) DecodeError![]const u8 {
-        return decodeItem(self.accounts, data, dest, false);
+        return decodeItem(self.accounts, data, dest);
+    }
+
+    /// For accounts with no Anchor discriminator, such as Metaplex's: the caller names the type,
+    /// and it starts at the first byte.
+    pub fn decodeAccountRaw(self: Idl, name: []const u8, data: []const u8, dest: []u8) DecodeError![]const u8 {
+        for (self.accounts) |*it| {
+            if (std.mem.eql(u8, it.name, name)) return render(it, data, dest);
+        }
+        return error.UnknownAccount;
     }
 
     /// A raw `Program data: <base64>` log line straight to event JSON. `scratch` holds the decoded bytes.
@@ -77,21 +92,26 @@ pub const Idl = struct {
     }
 };
 
-fn decodeItem(items: []const Item, data: []const u8, dest: []u8, strict: bool) DecodeError![]const u8 {
-    for (items) |it| {
-        if (!std.mem.startsWith(u8, data, it.disc)) continue;
-        const ty = it.ty orelse return error.UnsupportedType;
-        var r = borsh.BorshReader.init(data[it.disc.len..]);
-        var out = borsh.JsonOut.init(dest);
-        try out.put("{\"name\":");
-        try out.string(it.name);
-        try out.put(",\"data\":");
-        try borsh.writeValue(&ty, &r, &out, 0);
-        try out.put("}");
-        if (strict and r.remaining() != 0) return error.TrailingBytes;
-        return out.written();
+/// anchor-lang's EVENT_IX_TAG_LE: the first 8 bytes of sha256("anchor:event"), reversed.
+const EVENT_IX_TAG = [_]u8{ 0xe4, 0x45, 0xa5, 0x2e, 0x51, 0xcb, 0x9a, 0x1d };
+
+fn decodeItem(items: []const Item, data: []const u8, dest: []u8) DecodeError![]const u8 {
+    for (items) |*it| {
+        if (std.mem.startsWith(u8, data, it.disc)) return render(it, data[it.disc.len..], dest);
     }
     return error.UnknownDiscriminator;
+}
+
+fn render(it: *const Item, payload: []const u8, dest: []u8) DecodeError![]const u8 {
+    const ty = it.ty orelse return error.UnsupportedType;
+    var r = borsh.BorshReader.init(payload);
+    var out = borsh.JsonOut.init(dest);
+    try out.put("{\"name\":");
+    try out.string(it.name);
+    try out.put(",\"data\":");
+    try borsh.writeValue(&ty, &r, &out, 0);
+    try out.put("}");
+    return out.written();
 }
 
 /// std.json.Value parsing recurses, so bound nesting before it sees hostile input.
@@ -141,6 +161,18 @@ fn collectDefs(a: Allocator, types: ?Value, accounts: ?Value) IdlError![]Def {
     return defs[0..n];
 }
 
+/// Name to position, keeping the first of any duplicates. A scan per `defined` would make a large
+/// IDL quadratic.
+fn indexDefs(a: Allocator, defs: []const Def) IdlError!std.StringHashMapUnmanaged(u32) {
+    var index: std.StringHashMapUnmanaged(u32) = .empty;
+    try index.ensureTotalCapacity(a, @intCast(defs.len));
+    for (defs, 0..) |d, i| {
+        const slot = index.getOrPutAssumeCapacity(d.name);
+        if (!slot.found_existing) slot.value_ptr.* = @intCast(i);
+    }
+    return index;
+}
+
 fn field(v: Value, key: []const u8) ?Value {
     return if (v == .object) v.object.get(key) else null;
 }
@@ -162,6 +194,7 @@ const Kind = enum { instruction, account, event };
 const Resolver = struct {
     a: Allocator,
     defs: []Def,
+    index: std.StringHashMapUnmanaged(u32),
 
     fn items(self: *Resolver, v: ?Value, prefix: []const u8, kind: Kind) IdlError![]const Item {
         const arr = try list(v);
@@ -196,6 +229,11 @@ const Resolver = struct {
             }
             return out;
         }
+        if (field(x, "discriminant")) |d| {
+            const value = field(d, "value") orelse return error.InvalidDiscriminator;
+            if (value != .integer or value.integer < 0 or value.integer > 255) return error.InvalidDiscriminator;
+            return try self.a.dupe(u8, &.{@intCast(value.integer)});
+        }
         var snake: [anchor.MAX_NAME_LEN]u8 = undefined;
         const n = if (kind == .instruction) try toSnake(name, &snake) else name;
         const h = anchor.computeDiscriminator(n, prefix) catch return error.NameTooLong;
@@ -203,8 +241,7 @@ const Resolver = struct {
     }
 
     fn named(self: *Resolver, name: []const u8) IdlError!Type {
-        for (self.defs, 0..) |d, i| if (std.mem.eql(u8, d.name, name)) return self.def(i, 0);
-        return error.UnknownType;
+        return self.def(self.index.get(name) orelse return error.UnknownType, 0);
     }
 
     fn def(self: *Resolver, i: usize, depth: usize) IdlError!Type {
@@ -265,11 +302,19 @@ const Resolver = struct {
                     for (arr, out) |x, *o| o.* = .{ .name = "", .ty = try self.resolve(x, depth + 1) };
                     return Type.recordOf(out);
                 }
+                // Borsh writes a map as a sequence of key, value pairs, and a set as a sequence.
+                if (field(v, "hashSet") orelse field(v, "bTreeSet")) |t| return Type.vecOf(self.a, try self.resolve(t, depth + 1));
+                if (field(v, "hashMap") orelse field(v, "bTreeMap")) |t| {
+                    const pair = try list(t);
+                    if (pair.len != 2) return error.UnsupportedType;
+                    const kv = try self.a.alloc(Field, 2);
+                    for (pair, kv) |x, *o| o.* = .{ .name = "", .ty = try self.resolve(x, depth + 1) };
+                    return Type.vecOf(self.a, Type.recordOf(kv));
+                }
                 if (field(v, "defined")) |t| {
                     const name = if (t == .string) t.string else try str(t, "name");
                     if (field(t, "generics") != null) return error.UnsupportedType;
-                    for (self.defs, 0..) |d, i| if (std.mem.eql(u8, d.name, name)) return self.def(i, depth + 1);
-                    return error.UnknownType;
+                    return self.def(self.index.get(name) orelse return error.UnknownType, depth + 1);
                 }
                 return error.UnsupportedType;
             },
@@ -332,10 +377,35 @@ test "REQ-SVM-02 idl current format: explicit discriminators" {
     try std.testing.expectError(error.UnsupportedType, idl.decodeInstruction(&generic, &buf));
     // Failure modes.
     try std.testing.expectError(error.UnknownDiscriminator, idl.decodeInstruction(&.{ 1, 2, 3, 4, 5, 6, 7, 8 }, &buf));
-    try std.testing.expectError(error.TrailingBytes, idl.decodeInstruction(&.{ 219, 200, 88, 176, 158, 63, 253, 127, 7, 0, 0, 0, 0 }, &buf));
+    try expectDecode("{\"name\":\"update\",\"data\":{\"value\":7}}", idl.decodeInstruction(&.{ 219, 200, 88, 176, 158, 63, 253, 127, 7, 0, 0, 0, 0 }, &buf));
     try std.testing.expectError(error.UnexpectedEndOfBuffer, idl.decodeInstruction(&.{ 219, 200, 88, 176, 158, 63, 253, 127, 7 }, &buf));
     var tiny: [8]u8 = undefined;
     try std.testing.expectError(error.BufferTooSmall, idl.decodeInstruction(&.{ 219, 200, 88, 176, 158, 63, 253, 127, 7, 0, 0, 0 }, &tiny));
+}
+
+test "REQ-SVM-02 idl event wrapped by emit_cpi or longer than the IDL, as found on mainnet" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const idl = try Idl.parse(arena.allocator(), external_json);
+    var buf: [64]u8 = undefined;
+    const event = [_]u8{ 96, 184, 197, 243, 139, 2, 90, 148, 9, 0, 0, 0 };
+    const want = "{\"name\":\"MyEvent\",\"data\":{\"value\":9}}";
+    try expectDecode(want, idl.decodeEvent(&(EVENT_IX_TAG ++ event), &buf));
+    // A field the program added after this IDL was published.
+    try expectDecode(want, idl.decodeEvent(&(EVENT_IX_TAG ++ event ++ [_]u8{ 1, 2, 3 }), &buf));
+    try std.testing.expectError(error.UnknownDiscriminator, idl.decodeEvent(&EVENT_IX_TAG, &buf));
+}
+
+test "REQ-SVM-02 idl account with no discriminator, as Metaplex's on mainnet" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const idl = try Idl.parse(arena.allocator(), external_json);
+    var buf: [64]u8 = undefined;
+    const data = [_]u8{ 1, 0, 0, 0, 0, 0, 0, 0 };
+    try std.testing.expectError(error.UnknownDiscriminator, idl.decodeAccount(&data, &buf));
+    try expectDecode("{\"name\":\"MyAccount\",\"data\":{\"field\":1}}", idl.decodeAccountRaw("MyAccount", &data, &buf));
+    try std.testing.expectError(error.UnknownAccount, idl.decodeAccountRaw("Nope", &data, &buf));
+    try std.testing.expectError(error.UnexpectedEndOfBuffer, idl.decodeAccountRaw("MyAccount", data[0..3], &buf));
 }
 
 test "REQ-SVM-02 idl legacy format: computed discriminators" {
@@ -402,6 +472,18 @@ test "REQ-SVM-02 raydium clmm swap instruction and event" {
     try std.testing.expect(std.mem.endsWith(u8, out, "\"amount_0\":5,\"transfer_fee_0\":0,\"amount_1\":0,\"transfer_fee_1\":0,\"zero_for_one\":true,\"sqrt_price_x64\":0,\"liquidity\":0,\"tick\":-100}}"));
 }
 
+test "REQ-SVM-02 idl maps, sets and Shank discriminants" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const idl = try Idl.parse(arena.allocator(),
+        \\{"instructions":[{"name":"Mint","discriminant":{"type":"u8","value":43},"args":[
+        \\  {"name":"m","type":{"hashMap":["u8","string"]}},{"name":"s","type":{"hashSet":"u16"}}]}]}
+    );
+    var buf: [128]u8 = undefined;
+    const raw = [_]u8{ 43, 1, 0, 0, 0, 7, 2, 0, 0, 0, 'h', 'i', 1, 0, 0, 0, 9, 0 };
+    try expectDecode("{\"name\":\"Mint\",\"data\":{\"m\":[[7,\"hi\"]],\"s\":[9]}}", idl.decodeInstruction(&raw, &buf));
+}
+
 test "REQ-SVM-02 idl rejects malformed input" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -415,8 +497,8 @@ test "REQ-SVM-02 idl rejects malformed input" {
         \\ "types":[{"name":"T","type":{"kind":"struct","fields":[{"name":"n","type":{"defined":"T"}}]}}]}
     ));
     try std.testing.expectError(error.InvalidDiscriminator, Idl.parse(a, "{\"instructions\":[{\"name\":\"a\",\"discriminator\":[256]}]}"));
-    const map = try Idl.parse(a, "{\"instructions\":[{\"name\":\"a\",\"args\":[{\"name\":\"x\",\"type\":{\"hashMap\":[\"u8\",\"u8\"]}}]}]}");
-    try std.testing.expect(map.instructions[0].ty == null);
+    const unsupported = try Idl.parse(a, "{\"instructions\":[{\"name\":\"a\",\"args\":[{\"name\":\"x\",\"type\":{\"coption\":\"u8\"}}]}]}");
+    try std.testing.expect(unsupported.instructions[0].ty == null);
     var deep: [MAX_JSON_DEPTH + 1]u8 = @splat('[');
     try std.testing.expectError(error.JsonTooDeep, Idl.parse(a, &deep));
 }

@@ -10,8 +10,10 @@ import hashlib
 import json
 import os
 import random
+import re
 import struct
 import sys
+import tempfile
 import time
 
 import base58 as b58ref
@@ -26,7 +28,7 @@ EXT = sys.argv[1] if len(sys.argv) > 1 else os.path.join(REPO, "zig-out", "bin",
 
 con = duckdb.connect(config={"allow_unsigned_extensions": "true"})
 con.execute(f"LOAD '{EXT}'")
-registered = {r[0] for r in con.execute("select distinct function_name from duckdb_functions() where function_name like 'web3_%'").fetchall()}
+registered = {r[0] for r in con.execute("select distinct function_name from duckdb_functions() where function_name like 'web3_%' and function_name not like '%\\_error' escape '\\'").fetchall()}
 exercised = set()
 recorded = []  # every call, replayed through WASM by scripts/test_wasm.mjs
 signatures = {r[0]: (r[1], r[2]) for r in con.execute(
@@ -111,6 +113,11 @@ def check_math():
         eq(bytes(q("web3_u256_to_bytes", str(a))), a.to_bytes(32, "big"), "u256 bytes")
         s = a - 2**255
         eq(q("web3_i256_from_bytes", (s % 2**256).to_bytes(32, "big")), str(s), "i256")
+    eq(q("web3_i256_from_bytes", b"\xff"), "-1", "short i256 sign-extends")
+    eq(q("web3_i256_from_bytes", b"\x7f"), "127", "short positive i256")
+    eq(q("web3_i256_from_bytes", b"\x80\x00"), "-32768", "i16 minimum")
+    eq(q("web3_i256_from_bytes", b""), None, "empty i256 is NULL")
+    eq(q("web3_i256_from_bytes", b"\x00" * 33), None, "too long i256 is NULL")
 
 
 def check_evm():
@@ -194,6 +201,8 @@ def check_svm():
     eq(json.loads(q("web3_anchor_decode_account", idl, acct)), {"name": "Pool", "data": {"fee": 30}}, "idl account")
     ev = hashlib.sha256(b"event:Swapped").digest()[:8] + struct.pack("<I", 4)
     eq(json.loads(q("web3_anchor_decode_event", idl, ev)), {"name": "Swapped", "data": {"out": 4}}, "idl event")
+    eq(json.loads(q("web3_anchor_decode_account_raw", idl, "Pool", acct[8:])), {"name": "Pool", "data": {"fee": 30}}, "idl raw account")
+    eq(q("web3_anchor_decode_account_raw", idl, "Nope", acct[8:]), None, "unknown raw account is NULL")
     import base64
     line = "Program data: " + base64.b64encode(ev).decode()
     eq(json.loads(q("web3_anchor_decode_event_log", idl, line)), {"name": "Swapped", "data": {"out": 4}}, "idl log")
@@ -222,23 +231,23 @@ def check_utxo():
     for spk, kind, addr in cases:
         eq(q("web3_btc_script_type", spk), kind, "script type")
         eq(q("web3_btc_address", "bitcoin", spk), addr, "address")
-        eq(json.loads(q("web3_btc_script_json", "bitcoin", spk))["address"], addr, "script json")
+        eq(json.loads(q("web3_btc_script", "bitcoin", spk))["address"], addr, "script json")
     # BIP-350 test vector, pinned so the helper above is itself checked.
     bip350 = bytes.fromhex("79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798")
     eq(bech32m_address("bc", 1, bip350), "bc1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vqzk5jj0", "bech32m helper")
     eq(q("web3_btc_address", "bitcoin", b"\x51\x20" + bip350), "bc1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vqzk5jj0", "BIP-350")
     eq(q("web3_btc_address", "nosuchnet", cases[0][0]), None, "unknown network is NULL")
     eq(bytes(q("web3_btc_op_return", b"\x6a\x03abc")), b"abc", "op_return")
-    runes = json.loads(q("web3_btc_runestone_json", b"\x6a\x5d\x02\x02\x05"))
+    runes = json.loads(q("web3_btc_runestone", b"\x6a\x5d\x02\x02\x05"))
     assert runes, "runestone json"
-    ins = json.loads(q("web3_btc_inscription_json", b"\x00\x63\x03ord\x51\x0atext/plain\x00\x02hi\x68"))
+    ins = json.loads(q("web3_btc_inscription", b"\x00\x63\x03ord\x51\x0atext/plain\x00\x02hi\x68"))
     eq(ins["content_type"], "text/plain", "inscription")
     # Expected values below follow ord's envelope.rs and varint.rs.
     good = b"\x00\x63\x03ord\x00\x02hi\x68"
-    eq(json.loads(q("web3_btc_inscription_json", b"\x00\x63\x03ord\x76\x68" + good))["body"], "0x6869", "bad envelope does not hide a later one")
-    eq(q("web3_btc_inscription_json", b"\x00\x63\x03ord\x01\x01\x0atext/plain\x00\x02hi"), "null", "unterminated envelope")
-    eq(q("web3_btc_runestone_json", b"\x6a\x5d\x05\x82\x00\x05\x00\x01"), '{"fields":[[2,5]],"body":[1]}', "non-minimal varint")
-    big = json.loads(q("web3_btc_runestone_json", b"\x6a\x5d\x4d" + struct.pack("<H", 11000) + b"\x01" * 11000))
+    eq(json.loads(q("web3_btc_inscription", b"\x00\x63\x03ord\x76\x68" + good))["body"], "0x6869", "bad envelope does not hide a later one")
+    eq(q("web3_btc_inscription", b"\x00\x63\x03ord\x01\x01\x0atext/plain\x00\x02hi"), "null", "unterminated envelope")
+    eq(q("web3_btc_runestone", b"\x6a\x5d\x05\x82\x00\x05\x00\x01"), '{"fields":[[2,5]],"body":[1]}', "non-minimal varint")
+    big = json.loads(q("web3_btc_runestone", b"\x6a\x5d\x4d" + struct.pack("<H", 11000) + b"\x01" * 11000))
     eq(len(big["fields"]), 5500, "runestone over 10 KB")
 
 
@@ -280,10 +289,10 @@ def check_clmm():
     for _ in range(100):
         a, b = sorted(rng.randint(2**70, 2**150) for _ in range(2))
         liq = rng.getrandbits(100)
-        eq(q("web3_uni_amount1_delta", str(a), str(b), str(liq), 0), str(liq * (b - a) // q96), "amount1 floor")
-        eq(q("web3_uni_amount1_delta", str(a), str(b), str(liq), 1), str(-(-liq * (b - a) // q96)), "amount1 ceil")
-        eq(q("web3_uni_amount0_delta", str(a), str(b), str(liq), 0), str(((liq << 96) * (b - a) // b) // a), "amount0 floor")
-        eq(q("web3_uni_amount0_delta", str(a), str(b), str(liq), 1), str(-(-(-(-(liq << 96) * (b - a) // b)) // a)), "amount0 ceil")
+        eq(q("web3_uni_amount1_delta", str(a), str(b), str(liq), False), str(liq * (b - a) // q96), "amount1 floor")
+        eq(q("web3_uni_amount1_delta", str(a), str(b), str(liq), True), str(-(-liq * (b - a) // q96)), "amount1 ceil")
+        eq(q("web3_uni_amount0_delta", str(a), str(b), str(liq), False), str(((liq << 96) * (b - a) // b) // a), "amount0 floor")
+        eq(q("web3_uni_amount0_delta", str(a), str(b), str(liq), True), str(-(-(-(-(liq << 96) * (b - a) // b)) // a)), "amount0 ceil")
     for dex, bound in (("orca", 443636), ("raydium", 443636), ("cetus", 443636)):
         for tick in [0, bound, -bound] + [rng.randint(-bound, bound) for _ in range(100)]:
             sqrt = int(q(f"web3_{dex}_sqrt_price_from_tick", tick))
@@ -305,17 +314,19 @@ def check_tokens():
     a, b = bytes(range(20)), bytes(range(20, 40))
     word = lambda x: x.rjust(32, b"\0")
     v = 10**30
-    got = json.loads(q("web3_erc_decode_json", transfer + word(a) + word(b), encode(["uint256"], [v])))
+    got = json.loads(q("web3_erc_decode", transfer + word(a) + word(b), encode(["uint256"], [v])))
     eq((got["event"], got["from"], got["to"], str(got["value"])), ("erc20_transfer", "0x" + a.hex(), "0x" + b.hex(), str(v)), "erc20")
-    got = json.loads(q("web3_erc_decode_json", approval + word(a) + word(b), encode(["uint256"], [5])))
+    got = json.loads(q("web3_erc_decode", approval + word(a) + word(b), encode(["uint256"], [5])))
     eq(str(got["value"]), "5", "approval")
-    got = json.loads(q("web3_erc_decode_json", transfer + word(a) + word(b) + word(b"\x07"), b""))
+    got = json.loads(q("web3_erc_decode", transfer + word(a) + word(b) + word(b"\x07"), b""))
     eq((got["event"], str(got["token_id"])), ("erc721_transfer", "7"), "erc721")
-    eq(q("web3_erc_decode_json", b"\x01", b""), None, "bad topics is NULL")
-    got = json.loads(q("web3_spl_decode_json", b"\x03" + struct.pack("<Q", 42)))
+    eq(q("web3_erc_decode", b"\x01", b""), None, "bad topics is NULL")
+    got = json.loads(q("web3_spl_decode", b"\x03" + struct.pack("<Q", 42)))
     eq((got["type"], got["amount"]), ("transfer", 42), "spl transfer")
-    got = json.loads(q("web3_spl_decode_json", b"\x0c" + struct.pack("<QB", 42, 6)))
+    got = json.loads(q("web3_spl_decode", b"\x0c" + struct.pack("<QB", 42, 6)))
     eq((got["amount"], got["decimals"]), (42, 6), "spl checked")
+    eq(json.loads(q("web3_spl_decode", b"\x09")), {"type": "close_account"}, "spl close")
+    eq(q("web3_spl_decode", b"\x06\x02\x02"), None, "bad COption is NULL")
 
 
 def check_lending():
@@ -370,6 +381,21 @@ def check_vector_semantics():
        [(hashlib.sha256(long_value.encode()).hexdigest(),)] * 3, "long strings")
 
 
+def check_vector_shapes():
+    """Dictionary, selection and constant vectors must read the same values as flat ones."""
+    con.execute("""create or replace temp table shapes as
+        select (i % 7)::VARCHAR::BLOB v from range(30000) t(i)""")
+    want = {bytes(v): keccak256(bytes(v)) for (v,) in con.execute("select distinct v from shapes").fetchall()}
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "shapes.parquet").replace("\\", "/")
+        con.execute(f"copy shapes to '{path}' (format parquet, row_group_size 2048)")
+        for label, sql in (("dictionary", f"select v, web3_keccak256(v) from '{path}'"),
+                           ("filter", "select v, web3_keccak256(v) from shapes where v <> '3'::BLOB"),
+                           ("join", "select a.v, web3_keccak256(a.v) from shapes a join (select distinct v from shapes) b on a.v = b.v")):
+            for v, h in con.execute(sql).fetchall():
+                eq(bytes(h), want[bytes(v)], label)
+
+
 def check_schema_binding():
     """REQ-DUCK-03: constant schemas parse once at bind, varying ones still work per row."""
     blob = struct.pack("<Q", 1)
@@ -405,6 +431,19 @@ def check_schema_binding():
         assert "invalid schema" in str(e), e
     else:
         raise AssertionError("a named chain past the depth limit must fail at bind, not overflow the stack")
+    # Interleaved schemas, as a join against a table of IDLs gives, and a bad one among them.
+    alternating = [("{a:u64}", '{"a":1}'), ("{b:u64}", '{"b":1}'), ("nope", None)] * 700
+    eq(con.execute("select web3_borsh_decode(s, ?) from (select unnest(?) s, generate_subscripts(?, 1) i) order by i", [blob, [a for a, _ in alternating], [a for a, _ in alternating]]).fetchall(),
+       [(w,) for _, w in alternating], "interleaved schemas")
+    eq(con.execute("select web3_borsh_decode(s, ?) from (select repeat(' ', 5000000) || '{a:u64}' || i s from range(1) t(i))", [blob]).fetchone()[0], None, "column schema over the cap is NULL")
+    eq(con.execute("select web3_borsh_decode_error(s, ?) from (select repeat(' ', 5000000) || i s from range(1) t(i))", [blob]).fetchone()[0], "SchemaTooLarge", "cap is reported")
+    # A constant schema is parsed in bind: it fails even with no rows to run on.
+    try:
+        con.execute("select web3_borsh_decode('nope', b) from (select ''::blob b where false)").fetchall()
+    except duckdb.Error as e:
+        assert "invalid schema" in str(e), e
+    else:
+        raise AssertionError("REQ-DUCK-03: constant schema must be parsed at bind")
     # Distinct rows, or DuckDB folds the call into one evaluation and the timing means nothing.
     n = 1_000_000
     rows = f"(select printf('%08d', i)::blob b, '{{a:u64}}' s from range({n}) t(i))"
@@ -415,6 +454,21 @@ def check_schema_binding():
     eq(con.execute(f"select count(distinct web3_borsh_decode(s, b)) from {rows}").fetchone()[0], n, "column schema")
     column_t = time.perf_counter() - t0
     print(f"    {n / const_t / 1e6:.2f} M rows/s bound schema, {n / column_t / 1e6:.2f} M rows/s per-chunk schema")
+
+
+def check_large_rows_and_errors():
+    """A valid row never looks like a malformed one, and every NULL can say why."""
+    big = bytes(range(256)) * 400  # 102,400 bytes, 204,800 hex chars: past the 64 KB row buffer
+    got = con.execute("select web3_hex_encode(?)", [big]).fetchone()[0]
+    eq(got.removeprefix("0x"), big.hex(), "result over 64 KB")
+    too_big = con.execute("select web3_hex_encode(repeat('a'::blob, 9000000))").fetchone()[0]
+    eq(too_big, None, "result over 16 MB is NULL")
+    eq(con.execute("select web3_hex_encode_error(repeat('a'::blob, 9000000))").fetchone()[0], "BufferTooSmall", "and says so")
+    eq(con.execute("select web3_hex_decode_error('zz')").fetchone()[0] is not None, True, "malformed has a reason")
+    eq(con.execute("select web3_hex_decode_error('0x00')").fetchone()[0], None, "good row has none")
+    eq(con.execute("select web3_hex_decode_error(null)").fetchone()[0], None, "NULL in, NULL out")
+    eq(con.execute("select web3_evm_selector_error('function a()')").fetchone()[0], None, "schema function twin")
+    assert re.fullmatch(r"\d+\.\d+\.\d+", q("web3_version")), "version"
 
 
 def check_garbage():
@@ -464,7 +518,7 @@ def check_parquet():
 
 
 CHECKS = [check_hashes, check_encodings, check_math, check_evm, check_svm, check_move, check_utxo, check_cosmos,
-          check_clmm, check_tokens, check_lending, check_vector_semantics, check_schema_binding, check_garbage, check_parquet]
+          check_clmm, check_tokens, check_lending, check_vector_semantics, check_vector_shapes, check_schema_binding, check_large_rows_and_errors, check_garbage, check_parquet]
 
 
 def main():
@@ -472,7 +526,7 @@ def main():
     print(f"DuckDB {duckdb.__version__}, {len(registered)} functions from {EXT}")
     for check in CHECKS:
         section = check.__name__.removeprefix("check_")
-        needs = {"evm": "web3_evm_decode_log", "svm": "web3_sol_pda", "move": "web3_bcs_decode", "utxo": "web3_btc_address", "cosmos": "web3_ibc_denom", "clmm": "web3_uni_tick_to_price", "tokens": "web3_erc_decode_json", "lending": "web3_ray_mul"}.get(section)
+        needs = {"evm": "web3_evm_decode_log", "svm": "web3_sol_pda", "move": "web3_bcs_decode", "utxo": "web3_btc_address", "cosmos": "web3_ibc_denom", "clmm": "web3_uni_tick_to_price", "tokens": "web3_erc_decode", "lending": "web3_ray_mul"}.get(section)
         if needs and needs not in registered:
             print(f"  skipped {section}: not in this build")
             continue

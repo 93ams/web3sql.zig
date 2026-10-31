@@ -45,7 +45,7 @@ fn sqrtPriceX64ToDecimal(sqrt: []const u8, da: u8, db: u8, scale: u8, dest: []u8
 }
 
 const price_args = &[_]catalog.ArgType{ .text, .int, .int, .int };
-const delta_args = &[_]catalog.ArgType{ .text, .text, .text, .int };
+const delta_args = &[_]catalog.ArgType{ .text, .text, .text, .boolean };
 
 pub const entries = [_]catalog.Function{
     func("web3_uni_sqrt_ratio_at_tick", "Uniswap TickMath.getSqrtRatioAtTick", &.{.int}, .text, sqrtRatioAtTick),

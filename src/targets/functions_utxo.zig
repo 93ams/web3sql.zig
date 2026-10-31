@@ -19,8 +19,8 @@ fn scriptJson(network_name: []const u8, script: []const u8, dest: []u8) ![]const
 pub const entries = [_]catalog.Function{
     func("web3_btc_script_type", "scriptPubKey class, e.g. p2wpkh", &.{.bytes}, .text, scriptType),
     func("web3_btc_address", "Address of a scriptPubKey on a named network", &.{ .text, .bytes }, .text, address),
-    func("web3_btc_script_json", "Classification and address as JSON", &.{ .text, .bytes }, .text, scriptJson),
+    func("web3_btc_script", "Classification and address as JSON", &.{ .text, .bytes }, .text, scriptJson),
     func("web3_btc_op_return", "OP_RETURN payload bytes", &.{.bytes}, .bytes, utxo.op_return.extractPayload),
-    func("web3_btc_runestone_json", "Runestone tag/value pairs as JSON", &.{.bytes}, .text, utxo.runes.renderJson),
-    func("web3_btc_inscription_json", "Ordinals inscription in a witness script as JSON", &.{.bytes}, .text, utxo.ordinals.renderJson),
+    func("web3_btc_runestone", "Runestone tag/value pairs as JSON", &.{.bytes}, .text, utxo.runes.renderJson),
+    func("web3_btc_inscription", "Ordinals inscription in a witness script as JSON", &.{.bytes}, .text, utxo.ordinals.renderJson),
 };

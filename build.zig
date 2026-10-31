@@ -59,7 +59,7 @@ fn duckdbPlatform(b: *std.Build, t: std.Target) []const u8 {
         .aarch64 => "arm64",
         else => "amd64",
     };
-    return b.fmt("{s}_{s}", .{ os, arch });
+    return b.fmt("{s}_{s}{s}", .{ os, arch, if (t.abi.isMusl()) "_musl" else "" });
 }
 
 pub fn build(b: *std.Build) void {
@@ -73,6 +73,7 @@ pub fn build(b: *std.Build) void {
     const protocols_cfg = parseFeatures(b, ProtocolsConfig, "protocols", "Comma-delimited protocols (clmm,tokens,lending), 'all' or 'none' [default: all]");
 
     const options = b.addOptions();
+    options.addOption([]const u8, "version", VERSION);
     options.addOption(bool, "chain_evm", chains_cfg.evm);
     options.addOption(bool, "chain_svm", chains_cfg.svm);
     options.addOption(bool, "chain_move", chains_cfg.move);
@@ -226,6 +227,10 @@ pub fn build(b: *std.Build) void {
     wasm_artifact.rdynamic = true;
     wasm_artifact.stack_size = 256 * 1024;
 
+    // sql_gen links this once per function, which keeps warehouse bodies small.
+    const wasm_object = b.addObject(.{ .name = "web3_sql", .root_module = wasm_artifact.root_module });
+    wasm_object.bundle_compiler_rt = true;
+
     const wasm_size = b.addRunArtifact(b.addExecutable(.{
         .name = "wasm_size",
         .root_module = b.createModule(.{
@@ -254,6 +259,9 @@ pub fn build(b: *std.Build) void {
 
     const sql_gen = b.addRunArtifact(sql_gen_exe);
     sql_gen.addArtifactArg(wasm_artifact);
+    sql_gen.addArtifactArg(wasm_object);
+    sql_gen.addArg(b.graph.zig_exe);
+    _ = sql_gen.addOutputDirectoryArg("modules");
     const bigquery_sql = sql_gen.addOutputFileArg("bigquery_udfs.sql");
     const bigquery_js = sql_gen.addOutputFileArg("bigquery_web3.js");
     const snowflake_sql = sql_gen.addOutputFileArg("snowflake_udfs.sql");

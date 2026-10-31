@@ -21,6 +21,30 @@
 
 The host is shared, so runs vary by about 25%. In DuckDB, Borsh decoding of a short schema runs at 2 to 4 M rows/s; most of that time is DuckDB's own.
 
+## End to end
+
+`tools/reference/measure.py` on 10 M synthetic Uniswap Swap logs in a 307 MB Parquet file: DuckDB 2.0.0, 20 threads, on a host running other work, so treat these as lower bounds. Every row is asserted to decode.
+
+| Work | Native | Python, one thread |
+|---|---:|---:|
+| Decode a log to JSON, 20 threads | 7 to 8 M rows/s | |
+| Decode a log to JSON, 1 thread | 1.0 M rows/s | 35 k rows/s (`eth_abi`) |
+| Keccak-256 of the 160-byte data | 6 to 7 M rows/s | 80 to 100 k rows/s |
+
+So decoding is about 30x faster per thread and about 200x on 20 threads, reading Parquet included. The Python figure is a plain loop over fetched rows, which spares it a real UDF's marshalling and flatters it. It is measured on 300,000 rows.
+
+Other DuckDB measurements:
+
+| Case | Result |
+|---|---:|
+| Base58 worst row, 1280 bytes | 134 us to encode, 84 us to decode |
+| Short Borsh schema, constant | 24 M rows/s |
+| Same, four schemas alternating row by row in a column | 11 M rows/s |
+
+In V8, the generated Snowflake bodies take about 1 ms for a cold start and 2 to 4 us for a warm row. Bodies now carry one function each, so the largest functions take longer than this `web3_keccak256` figure.
+
+There is no automated benchmark regression check, because this host varies too much for one to mean anything. See H9 in `docs/HANDOFF.md`.
+
 ## Gaps
 
 - **Keccak-256.** A single-buffer Keccak on one core costs about 6 to 10 cycles per byte, so 1.5 GB/s is out of reach for one message. It is only plausible as multi-buffer SIMD over many short inputs, which has not been built. `hashBatch` is the API it would sit behind.

@@ -67,6 +67,9 @@ fn decodeEvent(idl: *const svm.idl.Idl, data: []const u8, dest: []u8) ![]const u
 fn decodeAccount(idl: *const svm.idl.Idl, data: []const u8, dest: []u8) ![]const u8 {
     return idl.decodeAccount(data, dest);
 }
+fn decodeAccountRaw(idl: *const svm.idl.Idl, name: []const u8, data: []const u8, dest: []u8) ![]const u8 {
+    return idl.decodeAccountRaw(name, data, dest);
+}
 fn decodeEventLog(idl: *const svm.idl.Idl, line: []const u8, dest: []u8) ![]const u8 {
     if (dest.len < 2) return error.BufferTooSmall;
     const half = dest.len / 2;
@@ -84,5 +87,6 @@ pub const entries = [_]catalog.Function{
     catalog.nativeOnly(schemaFunc("web3_anchor_decode_instruction", "JSON from an IDL and instruction data", &.{ .text, .bytes }, .text, parseIdl, decodeInstruction)),
     catalog.nativeOnly(schemaFunc("web3_anchor_decode_event", "JSON from an IDL and event data", &.{ .text, .bytes }, .text, parseIdl, decodeEvent)),
     catalog.nativeOnly(schemaFunc("web3_anchor_decode_account", "JSON from an IDL and account data", &.{ .text, .bytes }, .text, parseIdl, decodeAccount)),
+    catalog.nativeOnly(schemaFunc("web3_anchor_decode_account_raw", "JSON from an IDL, an account type name and account data with no discriminator, such as Metaplex's", &.{ .text, .text, .bytes }, .text, parseIdl, decodeAccountRaw)),
     catalog.nativeOnly(schemaFunc("web3_anchor_decode_event_log", "JSON from an IDL and a 'Program data:' log line", &.{ .text, .text }, .text, parseIdl, decodeEventLog)),
 };

@@ -14,13 +14,14 @@ const RUNTIME =
     \\function w3Text(u){var s="";for(var i=0;i<u.length;i++)s+=String.fromCharCode(u[i]);return decodeURIComponent(escape(s));}
     \\function web3_call(name,args,kinds,ret){
     \\var g=typeof globalThis!="undefined"?globalThis:this;
-    \\if(!g.__web3)g.__web3=new WebAssembly.Instance(new WebAssembly.Module(w3Unb64(WEB3_WASM)),{}).exports;
-    \\var w=g.__web3,n=args.length;
+    \\if(!g[WEB3_KEY]){if(typeof WebAssembly=="undefined")throw new Error("web3sql: this sandbox has no WebAssembly");
+    \\g[WEB3_KEY]=new WebAssembly.Instance(new WebAssembly.Module(w3Unb64(WEB3_WASM)),{}).exports;}
+    \\var w=g[WEB3_KEY],n=args.length;
     \\for(var i=0;i<n;i++)if(args[i]===null||args[i]===undefined)return null;
     \\w.web3_free();
     \\var argv=w.web3_alloc(8*n);if(!argv&&n)return null;
     \\for(var i=0;i<n;i++){var v=args[i],k=kinds.charAt(i),lo,hi;
-    \\if(k=="i"){var x=Number(v);if(!Number.isSafeInteger(x))return null;lo=x>>>0;hi=Math.floor(x/4294967296)>>>0;}
+    \\if(k=="i"||k=="o"){var x=Number(v);if(!Number.isSafeInteger(x))return null;lo=x>>>0;hi=Math.floor(x/4294967296)>>>0;}
     \\else{var u=k=="t"?w3Utf8(String(v)):(typeof v=="string"?w3Unb64(v):v);lo=u.length?w.web3_alloc(u.length):0;if(u.length&&!lo)return null;hi=u.length;new Uint8Array(w.memory.buffer,lo,u.length).set(u);}
     \\var dv=new DataView(w.memory.buffer);dv.setUint32(argv+8*i,lo,true);dv.setUint32(argv+8*i+4,hi,true);}
     \\var cap=w.web3_available(),out=w.web3_alloc(cap),len=w[name](argv,n,out,cap);
@@ -38,6 +39,7 @@ fn signatureKinds(w: *Writer, f: *const catalog.Function) Writer.Error!void {
         .bytes => 'b',
         .text => 't',
         .int => 'i',
+        .boolean => 'o',
     });
 }
 
@@ -75,28 +77,51 @@ fn bigQueryType(kind: anytype) []const u8 {
     };
 }
 
-/// The GCS library: BigQuery caps inline code at 32 KB, but external code resources at 1 MB.
-pub fn writeBigQueryLibrary(w: *Writer, wasm_base64: []const u8) Writer.Error!void {
-    try w.print("var WEB3_WASM=\"{s}\";\n", .{wasm_base64});
+/// BigQuery's limit on an inline code blob is 32 KB; stay clear of whichever KB it means.
+const BIGQUERY_INLINE_MAX = 32_000;
+
+fn writeModule(w: *Writer, key: []const u8, wasm_base64: []const u8) Writer.Error!void {
+    try w.print("var WEB3_KEY=\"__{s}\";var WEB3_WASM=\"{s}\";\n", .{ key, wasm_base64 });
     try w.writeAll(RUNTIME);
 }
 
-pub fn writeBigQuery(w: *Writer, functions: []const catalog.Function) Writer.Error!void {
+/// A function's own code, with the module and runtime that a body needs in front of it.
+fn writeInline(w: *Writer, f: *const catalog.Function, wasm_base64: []const u8, arg_prefix: []const u8, wrap_bytes_result: bool) Writer.Error!void {
+    try writeModule(w, f.name, wasm_base64);
+    try callBody(w, f, arg_prefix, wrap_bytes_result);
+}
+
+fn inlineSize(f: *const catalog.Function, wasm_base64: []const u8) usize {
+    var counter: Writer.Discarding = .init(&.{});
+    writeInline(&counter.writer, f, wasm_base64, "a", true) catch unreachable;
+    return @intCast(counter.fullCount());
+}
+
+/// The GCS library, for the functions too big to inline: external code resources may reach 1 MB.
+pub fn writeBigQueryLibrary(w: *Writer, wasm_base64: []const u8) Writer.Error!void {
+    try writeModule(w, "web3", wasm_base64);
+}
+
+/// `modules` holds each function's own module, base64, in the order of `functions`.
+pub fn writeBigQuery(w: *Writer, functions: []const catalog.Function, modules: []const []const u8) Writer.Error!void {
     try w.writeAll(
         \\-- web3sql BigQuery UDFs. Generated from the function catalogue; do not edit.
-        \\-- Upload bigquery_web3.js to GCS, then replace __WEB3_DATASET__ and __WEB3_GCS_URI__.
-        \\-- Inline wasm is impossible here: BigQuery limits inline code blobs to 32 KB.
+        \\-- Replace __WEB3_DATASET__. Functions with a library option exceed BigQuery's 32 KB inline
+        \\-- limit: for those, upload bigquery_web3.js to GCS and replace __WEB3_GCS_URI__.
         \\
     );
-    for (functions) |*f| {
+    for (functions, modules) |*f, module| {
         try w.print("CREATE OR REPLACE FUNCTION `__WEB3_DATASET__`.{s}(", .{f.name});
         for (f.args, 0..) |a, i| {
             if (i != 0) try w.writeAll(", ");
             // BigQuery rejects INT64 as a JavaScript UDF input.
             try w.print("a{d} {s}", .{ i, if (a == .int) "FLOAT64" else bigQueryType(a) });
         }
-        try w.print(") RETURNS {s} LANGUAGE js OPTIONS (library=[\"__WEB3_GCS_URI__\"], description=\"{s}\") AS r\"\"\"", .{ bigQueryType(f.ret), f.doc });
-        try callBody(w, f, "a", true);
+        try w.print(") RETURNS {s} LANGUAGE js OPTIONS (", .{bigQueryType(f.ret)});
+        const inlined = inlineSize(f, module) <= BIGQUERY_INLINE_MAX;
+        if (!inlined) try w.writeAll("library=[\"__WEB3_GCS_URI__\"], ");
+        try w.print("description=\"{s}\") AS r\"\"\"", .{f.doc});
+        if (inlined) try writeInline(w, f, module, "a", true) else try callBody(w, f, "a", true);
         try w.writeAll("\"\"\";\n");
     }
 }
@@ -109,23 +134,22 @@ fn snowflakeType(kind: anytype) []const u8 {
     };
 }
 
-pub fn writeSnowflake(w: *Writer, functions: []const catalog.Function, wasm_base64: []const u8) Writer.Error!void {
+/// `modules` holds each function's own module, base64, in the order of `functions`.
+pub fn writeSnowflake(w: *Writer, functions: []const catalog.Function, modules: []const []const u8) Writer.Error!void {
     try w.writeAll(
         \\-- web3sql Snowflake UDFs. Generated from the function catalogue; do not edit.
-        \\-- UNVERIFIED on a live account: Snowflake does not document WebAssembly in JavaScript UDFs,
-        \\-- and recommends bodies under 100 KB. Run one CREATE and one SELECT before deploying all.
+        \\-- UNVERIFIED on a live account: Snowflake does not document WebAssembly in JavaScript UDFs.
+        \\-- Run one CREATE and one SELECT before deploying all.
         \\
     );
-    for (functions) |*f| {
+    for (functions, modules) |*f, module| {
         try w.print("CREATE OR REPLACE FUNCTION {s}(", .{f.name});
         for (f.args, 0..) |a, i| {
             if (i != 0) try w.writeAll(", ");
             try w.print("A{d} {s}", .{ i, snowflakeType(a) });
         }
         try w.print(") RETURNS {s} LANGUAGE JAVASCRIPT RETURNS NULL ON NULL INPUT AS $$\n", .{snowflakeType(f.ret)});
-        try w.print("var WEB3_WASM=\"{s}\";\n", .{wasm_base64});
-        try w.writeAll(RUNTIME);
-        try callBody(w, f, "A", false);
+        try writeInline(w, f, module, "A", false);
         try w.writeAll("\n$$;\n");
     }
 }
@@ -143,7 +167,7 @@ pub fn writeFunctionDocs(w: *Writer, functions: []const catalog.Function) Writer
     try w.writeAll(
         \\# SQL functions
         \\
-        \\Generated from the function catalogue by `zig build docs`. Any malformed row returns `NULL`, and so does a valid row whose result exceeds 64 KB in DuckDB, or the 60 KB shared by arguments and result in WASM.
+        \\Generated from the function catalogue by `zig build docs`. Any malformed row returns `NULL`, and so does a valid row whose result exceeds 16 MB in DuckDB, or the 60 KB shared by arguments and result in WASM. In DuckDB, each function also has a `<name>_error` twin taking the same arguments, which returns `NULL` for a good row and the reason for a bad one. Reason names may change between releases.
         \\Types are DuckDB's. Functions marked *DuckDB only* parse JSON, and are left out of the WASM bundle to fit its size budget.
         \\
         \\| Function | Returns | Description |
@@ -181,15 +205,17 @@ test "function docs list every signature" {
 }
 
 test "REQ-WASM-03 BigQuery golden file" {
-    var buf: [4096]u8 = undefined;
+    var buf: [16 * 1024]u8 = undefined;
     var w = Writer.fixed(&buf);
-    try writeBigQuery(&w, &SAMPLE);
+    // The second function's module is too big to inline, so it takes the library route.
+    const too_big: [BIGQUERY_INLINE_MAX]u8 = @splat('Q');
+    try writeBigQuery(&w, &SAMPLE, &.{ "QUJD", &too_big });
     try std.testing.expectEqualStrings(@embedFile("golden/bigquery.sql"), w.buffered());
 }
 
 test "REQ-WASM-03 Snowflake golden file" {
     var buf: [16 * 1024]u8 = undefined;
     var w = Writer.fixed(&buf);
-    try writeSnowflake(&w, SAMPLE[1..], "QUJD");
+    try writeSnowflake(&w, SAMPLE[1..], &.{"QUJD"});
     try std.testing.expectEqualStrings(@embedFile("golden/snowflake.sql"), w.buffered());
 }

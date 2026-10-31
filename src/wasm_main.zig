@@ -18,7 +18,7 @@ var used: usize = 0;
 var schema_arena: [SCHEMA_ARENA_LEN]u8 = undefined;
 var schema_key: [4096]u8 = undefined;
 var schema_key_len: usize = 0;
-var schema_owner: ?*const catalog.Function = null;
+var schema_owner: ?*const anyopaque = null;
 var schema_value: *const anyopaque = undefined;
 
 /// Bump allocation out of the row scratch; returns 0 when full, which the host maps to NULL.
@@ -44,8 +44,9 @@ fn slotBytes(s: Slot) []const u8 {
     return @as([*]const u8, @ptrFromInt(s.ptr))[0..s.len];
 }
 
-fn cachedSchema(f: *const catalog.Function, text: []const u8) catalog.CallError!*const anyopaque {
-    if (schema_owner == f and std.mem.eql(u8, schema_key[0..schema_key_len], text)) return schema_value;
+fn cachedSchema(comptime f: *const catalog.Function, text: []const u8) catalog.CallError!*const anyopaque {
+    const owner: *const anyopaque = @ptrCast(f.prepared.?.prepare);
+    if (schema_owner == owner and std.mem.eql(u8, schema_key[0..schema_key_len], text)) return schema_value;
     schema_owner = null;
     var fba = std.heap.FixedBufferAllocator.init(&schema_arena);
     const parsed = try f.prepared.?.prepare(fba.allocator(), text);
@@ -54,18 +55,19 @@ fn cachedSchema(f: *const catalog.Function, text: []const u8) catalog.CallError!
         @memcpy(schema_key[0..text.len], text);
         schema_key_len = text.len;
         schema_value = parsed;
-        schema_owner = f;
+        schema_owner = owner;
     }
     return parsed;
 }
 
-fn dispatch(f: *const catalog.Function, argv: [*]const Slot, argc: u32, out: [*]u8, cap: u32) i32 {
+// Comptime, so an export references only its own function: sql_gen links each one alone.
+inline fn dispatch(comptime f: *const catalog.Function, argv: [*]const Slot, argc: u32, out: [*]u8, cap: u32) i32 {
     if (argc != f.args.len or argc > 8) return -1;
     var args: [8]catalog.Arg = undefined;
     for (f.args, argv[0..argc], 0..) |kind, slot, i| {
         args[i] = switch (kind) {
             .bytes, .text => .{ .bytes = slotBytes(slot) },
-            .int => .{ .int = @bitCast((@as(u64, slot.len) << 32) | slot.ptr) },
+            .int, .boolean => .{ .int = @bitCast((@as(u64, slot.len) << 32) | slot.ptr) },
         };
     }
     const dest = out[0..cap];
@@ -98,7 +100,7 @@ fn dispatch(f: *const catalog.Function, argv: [*]const Slot, argc: u32, out: [*]
 fn Export(comptime index: usize) type {
     return struct {
         fn call(argv: [*]const Slot, argc: u32, out: [*]u8, cap: u32) callconv(.c) i32 {
-            return dispatch(&functions[index], argv, argc, out, cap);
+            return dispatch(comptime &functions[index], argv, argc, out, cap);
         }
     };
 }
