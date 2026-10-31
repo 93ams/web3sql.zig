@@ -21,6 +21,7 @@ sh scripts/release.sh     # builds release/ with SHA256SUMS
 | Tick math | Every tick matches Uniswap, Orca and Raydium source, forward and inverse | `tools/reference/math_diff.py` |
 | Lending math | 200,000 cases each against constants parsed from Aave and Compound source | `tools/reference/math_diff.py` |
 | Anchor IDLs | Every instruction and event in 8 public IDLs resolves against zero-filled data, and instruction discriminators match | `tools/reference/idl_corpus.py` |
+| Real SDKs | 40,000 BCS values encoded by `@mysten/bcs`, 40,000 Bech32 addresses and typos from `cosmjs` and 4,000 IBC denoms, with no mismatch. All 164 generated warehouse statements parse under `sqlglot` | `tools/reference/sdk_diff.py` |
 | Mainnet sample | Pinned real data from 11 chains and blocks back to 2018, compared with `eth_abi`, on-chain contract views and each chain's own node. See the table below | `tools/reference/live_diff.py`, part of `make verify` |
 | Native and WASM agree | 99,626 mutated calls, 46% of them `NULL`, against the bundle and each per-function module. `make verify` runs 3 mutants per call; this figure used 25 | `tools/reference/wasm_diff.py` |
 | Warehouse JavaScript | Every Snowflake body and inline BigQuery body runs alone in a stripped V8 context and matches DuckDB | `scripts/test_wasm.mjs`, `scripts/test_snowflake.mjs` |
@@ -58,13 +59,13 @@ git push -u origin main
 
 Do not push a tag until you mean to release: `release.yml` publishes a public GitHub release for any `v*` tag. Tag the commit you mean to release, and only after this job is green.
 
-`ci.yml` has been rehearsed step by step on Linux, but not by GitHub, and `nightly-fuzz.yml` and the macOS and Windows jobs have not run in that form. Budget a first-run fix or two. `.github/workflows/release.yml` wraps `scripts/release.sh`.
+`ci.yml` passes on GitHub on Linux, macOS and Windows. `nightly-fuzz.yml` has been started by hand for the first time.
 
 **Done when:** CI is green on all jobs and one nightly run completes. Also set the security advisory contact that `SECURITY.md` promises.
 
 ## H2: macOS
 
-On each of an Intel and an Apple Silicon Mac, with a Python that has `duckdb` and `scripts/requirements-dev.txt`:
+CI's integration job already builds and runs the suite on `macos-latest` (Apple Silicon) with DuckDB 2.0 and 1.5. What is left is the Intel Mac and the release artifact itself. With a Python that has `duckdb` and `scripts/requirements-dev.txt`:
 
 ```sh
 python scripts/test_duckdb.py release/web3.osx_arm64.duckdb_extension   # or osx_amd64
@@ -86,7 +87,7 @@ These needed something a local run could not fetch. See "Skipped locally" below.
 
 ## H4: BigQuery
 
-Needs a GCP project (ROADMAP D3). Each function now carries only its own code, so 77 of the 82 are inline and need no bucket. Five exceed the 32 KB inline limit and need one (ROADMAP D5): `web3_borsh_decode` and the four `web3_evm_decode_log` and `web3_evm_decode_calldata` functions.
+Needs a GCP project (ROADMAP D3). Each function now carries only its own code, so 77 of the 82 are inline and need no bucket. Five exceed the 32 KB inline limit and need one: `web3_borsh_decode` and the four `web3_evm_decode_log` and `web3_evm_decode_calldata` functions.
 
 ```sh
 gsutil cp dist/bigquery_web3.js gs://<bucket>/web3/bigquery_web3.js
@@ -166,8 +167,5 @@ Tools that were not installed here, because they run third-party code. Each is a
 
 | Step | Needs | Command |
 |---|---|---|
-| dbt example | `dbt-duckdb` | `cd examples/dbt-duckdb && dbt run --profiles-dir .` |
-| SQL syntax check | `sqlglot` | Parse `dist/*.sql` with the `bigquery` and `snowflake` dialects |
 | `ord` reference | Rust crates `ordinals`, `bitcoin` | See H6 |
-| JavaScript SDK references | npm packages | See H6 |
 | Running musl builds in DuckDB, DuckDB pre-release | DuckDB CLI binaries | See H3 |

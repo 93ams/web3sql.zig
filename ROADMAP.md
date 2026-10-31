@@ -76,8 +76,8 @@ Stands in for real data and cannot replace it: generators produce what their aut
 - [x] L3.3 **CLMM:** every tick against Uniswap, Orca and Raydium source, forward and inverse. Cetus is not verified to the last digit.
 - [x] L3.4 **Lending:** 200,000 cases each against constants and formulas from Aave and Compound source. Separate functions cover Aave's v3.4+ and legacy formulas.
 - [x] L3.5 **Solana:** every item in 8 public IDLs resolves on zero-filled data, after adding `hashMap`, sets and Shank discriminants. Real Metaplex accounts carry no Anchor discriminator, see `docs/LIMITS.md`. No IDL surveyed uses generics, so those stay unsupported. Generated Borsh against a spec encoder.
-- [x] L3.6 **Move:** generated BCS against a spec encoder. SDK comparison moved to H6.
-- [x] L3.7 **Cosmos:** moved to H6, needs `cosmjs`. Known answers remain in `scripts/test_duckdb.py`.
+- [x] L3.6 **Move:** generated BCS against a spec encoder, and 40,000 values encoded by `@mysten/bcs`.
+- [x] L3.7 **Cosmos:** 40,000 Bech32 addresses and typos and 4,000 IBC denoms against `cosmjs`.
 - [x] L3.8 **Mainnet sample:** pinned real data from 11 chains and blocks back to 2018, replayed by `make verify` against `eth_abi`, contract views and node output. Exact on Aave, Compound and every tick, including Cetus. Found four real gaps, now fixed: SPL coverage, `emit_cpi` events, trailing bytes and Metaplex accounts. Token-2022 was added against it, and a wider run of 67,336 logs found no more. See `docs/HANDOFF.md`.
 
 ### L4: Hardening
@@ -100,7 +100,7 @@ Stands in for real data and cannot replace it: generators produce what their aut
 
 ### L6: Warehouse dress rehearsal
 
-- [x] L6.1 BigQuery and Snowflake JavaScript run in a stripped context with no `TextEncoder` or `atob`, fresh per call for Snowflake (`scripts/test_snowflake.mjs`). Offline SQL parsing moved to H3's skipped list.
+- [x] L6.1 BigQuery and Snowflake JavaScript run in a stripped context with no `TextEncoder` or `atob`, fresh per call for Snowflake (`scripts/test_snowflake.mjs`). All 164 generated statements parse under `sqlglot`.
 - [x] L6.2 In V8: about 1 ms cold start and 2 to 4 microseconds per warm row. Bodies are 40 KB at most and 1 MB in total, down from 294 KB each and 24 MB. `test_snowflake.mjs` fails above 100 KB.
 - [x] L6.3 77 of 82 BigQuery functions are inline, and each runs alone against every recorded call.
 
@@ -110,7 +110,7 @@ Stands in for real data and cannot replace it: generators produce what their aut
 - [x] L7.2 `web3_version()`.
 - [x] L7.3 Stability policy, supported versions, `CHANGELOG.md`, `CONTRIBUTING.md`.
 - [x] L7.4 Limits page and `NULL` troubleshooting. `examples/recipes/` has a tested query per chain.
-- [x] L7.5 `examples/dbt-duckdb`: moved to H3's skipped list, needs `dbt-duckdb`.
+- [x] L7.5 `examples/dbt-duckdb` runs under `dbt-duckdb`.
 - [x] L7.6 10M synthetic Parquet rows: 30x Python per thread, 200x on 20 threads, see `docs/PERF.md`. A regression check waits for H9, since this host varies too much.
 - [x] L7.7 `make verify` runs everything in one command, in about 7 minutes once reference sources are cached.
 
@@ -129,8 +129,8 @@ Settled while renames were free, and listed in `CHANGELOG.md`:
 
 Needs people, accounts or hardware this project does not have. [`docs/HANDOFF.md`](docs/HANDOFF.md) has the exact commands and completion test for each.
 
-- [ ] H1 **GitHub:** push, and get `ci.yml` and `nightly-fuzz.yml` green.
-- [ ] H2 **macOS:** load and test both builds.
+- [ ] H1 **GitHub:** `ci.yml` is green on all three systems. `nightly-fuzz.yml` still has to finish a run.
+- [ ] H2 **macOS:** Apple Silicon passes in CI. The Intel build and the release artifacts remain.
 - [ ] H3 **Other artifacts:** musl and `windows_arm64` runtime, newest DuckDB pre-release, and the steps skipped locally.
 - [ ] H4 **BigQuery:** deploy, replay, a million-row query with malformed rows.
 - [ ] H5 **Snowflake:** test one `CREATE` first.
