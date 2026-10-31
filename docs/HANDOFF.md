@@ -53,8 +53,10 @@ Every query in `examples/recipes/` runs against this sample in `make verify` and
 ## H1: GitHub
 
 ```sh
-git remote add origin <url> && git push -u origin main roadmap --tags
+git push -u origin main
 ```
+
+Do not push tags yet. `release.yml` publishes a public GitHub release for any `v*` tag, and the local `v0.1.0` points at a commit older than `main`. Tag the commit you mean to release, and only after this job is green.
 
 `ci.yml` has been rehearsed step by step on Linux, but not by GitHub, and `nightly-fuzz.yml` and the macOS and Windows jobs have not run in that form. Budget a first-run fix or two. `.github/workflows/release.yml` wraps `scripts/release.sh`.
 
