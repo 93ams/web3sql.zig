@@ -1,8 +1,8 @@
 # ROADMAP: web3sql.zig to production
 
-Everything in `prd.md` has a tested first implementation, tagged `v0.1.0` locally. This file lists what remains before a release people can depend on. `prd.md` says **what**; this file says **in what order, and how to know it is done**.
+Everything in `prd.md` has a tested first implementation, This file lists what remains before a release people can depend on. `prd.md` says **what**; this file says **in what order, and how to know it is done**.
 
-For now there is no bulk real data, no GitHub repository and no warehouse account. So the plan has two parts: §4 is everything this machine can prove, and §5 is the handoff to professionals. Done means `make verify` passes and the handoff list is the only thing left.
+For now there is no bulk real data and no warehouse account. So the plan has two parts: §4 is everything this machine can prove, and §5 is the handoff to professionals. Done means `make verify` passes and the handoff list is the only thing left.
 
 Toolchain: Zig 0.17.0. On WSL under `/mnt/c`, builds need `ZIG_LOCAL_CACHE_DIR` outside the repository; the Makefile sets it.
 
@@ -15,9 +15,6 @@ None of these block local work.
 | # | Question | Affects |
 |---|---|---|
 | D3 | Who provides a Snowflake account and a GCP project with a bucket, and with what cost cap? | H4, H5 |
-| D4 | Are Spark/Databricks and Polars in scope? The PRD names them and no target exists. DuckDB-WASM is named too, and is untested. | `prd.md` |
-| D5 | Is a GCS bucket acceptable for the 5 BigQuery functions over the 32 KB inline limit? The other 77 need none. | H4 |
-| D6 | Keccak-256 and Base58 at 1.5 GB/s: build multi-buffer Keccak, or restate the targets? See `docs/PERF.md`. | `prd.md` |
 
 ---
 
@@ -46,6 +43,9 @@ Reversing any of these is a change to the design, not a cleanup.
 - **A non-constant schema column** allocates from a per-chunk arena when its value changes. Bind cannot see those schemas, and a fixed buffer returned `NULL` for ordinary IDLs. Constant schemas and all decoding stay allocation-free.
 - **A row whose result exceeds 64 KB** retries on a heap buffer of up to 16 MB in DuckDB. Valid rows must not look malformed, and ordinary rows never take this path.
 - **`std.json`-based functions are native-only**, so they stay out of the WASM size budget.
+- **1.0 targets DuckDB, BigQuery and Snowflake.** Spark, Polars and DuckDB-WASM are out of scope.
+- **BigQuery uses a GCS bucket** for the 5 functions over the inline limit.
+- **Throughput targets match single-buffer code:** see `prd.md`. Multi-buffer Keccak is not planned.
 
 ---
 

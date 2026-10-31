@@ -2,7 +2,7 @@
 
 **Project Name:** `web3sql.zig`
 
-**Target Ecosystems:** Dune Datashare (S3 Parquet/Iceberg), DuckDB (Local & WASM), Snowflake, Google BigQuery, Apache Spark/Databricks, Polars
+**Target Ecosystems:** Dune Datashare (S3 Parquet/Iceberg), DuckDB (local), Snowflake, Google BigQuery
 
 **Implementation Language:** Zig
 
@@ -110,7 +110,7 @@ web3sql.zig/
 
 | Metric | Requirement |
 | :--- | :--- |
-| **Throughput (Hashing & Encoding)** | $\ge 1.5\text{ GB/s}$ per core for `Keccak-256` and Base58/Hex transformations. |
+| **Throughput (Hashing & Encoding)** | Per core: $\ge 1.5\text{ GB/s}$ for Hex, $\ge 300\text{ MB/s}$ for `Keccak-256`, and $\ge 8\text{ M ops/s}$ for Base58 on 32-byte keys. |
 | **Throughput (ABI / Borsh Decoding)** | $\ge 500,000\text{ events/sec}$ per core for structured DEX log decoding. |
 | **Memory Overhead** | Zero global heap allocations during row processing; $< 64\text{ KB}$ arena scratch buffer per worker thread. |
 | **Cross-Compilation** | Single `zig build` target supporting Linux, macOS, Windows, and WebAssembly (`wasm32`). |
