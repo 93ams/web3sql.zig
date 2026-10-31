@@ -33,8 +33,10 @@ reference: duckdb
 	$(PYTHON) tools/reference/schema_diff.py zig-out/bin/web3.duckdb_extension 5000
 	$(PYTHON) tools/reference/idl_corpus.py $(REFERENCE)/idls zig-out/bin/web3.duckdb_extension
 	REFERENCE=$(REFERENCE) $(PYTHON) tools/reference/live_diff.py zig-out/bin/web3.duckdb_extension
+	REFERENCE=$(REFERENCE) $(PYTHON) scripts/test_recipes.py
 	$(PYTHON) tools/reference/wasm_diff.py zig-out/bin/web3.duckdb_extension 3 dist/mutated_calls.json
 	node scripts/test_wasm.mjs dist/bigquery_web3.js dist/mutated_calls.json
+	node scripts/test_snowflake.mjs dist/snowflake_udfs.sql dist/duckdb_calls.json dist/bigquery_udfs.sql dist/mutated_calls.json
 
 soak: duckdb
 	$(PYTHON) tools/reference/soak.py zig-out/bin/web3.duckdb_extension 1800

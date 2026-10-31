@@ -4,7 +4,10 @@
 live_diff.py replays the result offline, so `make verify` needs no network and cannot drift.
 This is a sample to catch wrong assumptions, not a replacement for docs/HANDOFF.md H6.
 
-Usage: live_capture.py [evm svm bitcoin aptos sui cosmos]
+Set LIVE_DIR and LIVE_SCALE for a bulk run outside the repository. Only rows that expose a bug belong
+in the tracked sample, which stays small so `make verify` stays quick.
+
+Usage: live_capture.py [evm evm_arbitrum evm_base ... svm token2022 bitcoin aptos sui cosmos]
 """
 import base64
 import gzip
@@ -17,7 +20,8 @@ import urllib.request
 from eth_utils import keccak
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-OUT = os.path.join(HERE, "live")
+OUT = os.environ.get("LIVE_DIR", os.path.join(HERE, "live"))
+SCALE = int(os.environ.get("LIVE_SCALE", "1"))
 HEADERS = {"content-type": "application/json", "user-agent": "web3sql-reference"}
 
 
@@ -94,11 +98,60 @@ UNI_POOLS = [
 CUSDC = "0x39aa39c021dfbae8fac545936693ac917d5e7563"
 
 
-def rpc(method, *params):
-    r = fetch(EVM_RPC, {"jsonrpc": "2.0", "id": 1, "method": method, "params": list(params)})
+def rpc(method, *params, url=EVM_RPC):
+    r = fetch(url, {"jsonrpc": "2.0", "id": 1, "method": method, "params": list(params)})
     if "error" in r:
         raise RuntimeError(f"{method}: {r['error']}")
     return r["result"]
+
+
+# Harder shapes for the L2 and bulk samples: arrays, nested tuples and bytes.
+BROAD_EVENTS = EVENTS + [
+    "event TransferSingle(address indexed operator, address indexed from, address indexed to, uint256 id, uint256 value)",
+    "event TransferBatch(address indexed operator, address indexed from, address indexed to, uint256[] ids, uint256[] values)",
+    "event Mint(address sender, address indexed owner, int24 indexed tickLower, int24 indexed tickUpper, uint128 amount, uint256 amount0, uint256 amount1)",
+    "event Burn(address indexed owner, int24 indexed tickLower, int24 indexed tickUpper, uint128 amount, uint256 amount0, uint256 amount1)",
+    "event Supply(address indexed reserve, address user, address indexed onBehalfOf, uint256 amount, uint16 indexed referralCode)",
+    "event UserOperationEvent(bytes32 indexed userOpHash, address indexed sender, address indexed paymaster, uint256 nonce, bool success, uint256 actualGasCost, uint256 actualGasUsed)",
+]
+BROAD_CALLS = CALLS + [
+    "function aggregate3((address target, bool allowFailure, bytes callData)[] calls)",
+    "function handleOps((address sender, uint256 nonce, bytes initCode, bytes callData, uint256 callGasLimit, uint256 verificationGasLimit, uint256 preVerificationGas, uint256 maxFeePerGas, uint256 maxPriorityFeePerGas, bytes paymasterAndData, bytes signature)[] ops, address beneficiary)",
+    "function safeTransferFrom(address from, address to, uint256 id, uint256 amount, bytes data)",
+    "function execTransaction(address to, uint256 value, bytes data, uint8 operation, uint256 safeTxGas, uint256 baseGas, uint256 gasPrice, address gasToken, address refundReceiver, bytes signatures)",
+]
+EVM_CHAINS = {
+    "evm_arbitrum": "https://arbitrum-one-rpc.publicnode.com",
+    "evm_base": "https://base-rpc.publicnode.com",
+    "evm_optimism": "https://optimism-rpc.publicnode.com",
+    "evm_polygon": "https://polygon-bor-rpc.publicnode.com",
+    "evm_bsc": "https://bsc-rpc.publicnode.com",
+    "evm_ethereum": EVM_RPC,
+}
+
+
+def capture_chain(name, url, blocks=8, cap=120, head=None):
+    """Decodable logs and calls from blocks of any EVM chain, spread out rather than adjacent."""
+    head = head or int(rpc("eth_blockNumber", url=url), 16) - 128
+    blocks, cap = blocks * SCALE, cap * SCALE
+    wanted = {topic(canonical(e)): e for e in BROAD_EVENTS}
+    selectors = {selector(canonical(c)): c for c in BROAD_CALLS}
+    logs, calls, per = [], [], {}
+    for number in range(head - blocks * 37, head, 37):
+        block = rpc("eth_getBlockByNumber", hex(number), True, url=url)
+        for r in rpc("eth_getBlockReceipts", hex(number), url=url):
+            for log in r["logs"]:
+                sig = wanted.get(log["topics"][0]) if log["topics"] else None
+                if sig and per.get(sig, 0) < cap:
+                    per[sig] = per.get(sig, 0) + 1
+                    logs.append({"sig": sig, "topics": log["topics"], "data": log["data"]})
+        for tx in block["transactions"]:
+            sig = selectors.get(tx["input"][2:10])
+            if sig and per.get(sig, 0) < cap:
+                per[sig] = per.get(sig, 0) + 1
+                calls.append({"sig": sig, "input": tx["input"]})
+    print(f"{name}: from block {head - blocks * 37}, {len(logs)} logs, {len(calls)} calls")
+    save(name, {"logs": logs, "calls": calls})
 
 
 def capture_evm():
@@ -277,13 +330,52 @@ def capture_svm():
     save("svm", {"slot": slot, "spl": spl, "instructions": instructions, "events": events.get("all", []), "accounts": accounts, "mints": mints})
 
 
+TOKEN_2022 = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+
+
+def capture_token2022():
+    slot = sol("getSlot", {"commitment": "finalized"}) - 900
+    rows, taken = {}, 0
+    opts = {"maxSupportedTransactionVersion": 1, "rewards": False, "transactionDetails": "full"}
+    for _ in range(40):
+        if taken == 8:
+            break
+        slot -= 11
+        try:
+            raw = sol("getBlock", slot, dict(opts, encoding="json"))
+            parsed = sol("getBlock", slot, dict(opts, encoding="jsonParsed"))
+        except RuntimeError as e:
+            if "skipped" not in str(e).lower() and "not available" not in str(e).lower():
+                raise
+            continue
+        taken += 1
+        for tx, ptx in zip(raw["transactions"], parsed["transactions"]):
+            if tx["meta"]["err"]:
+                continue
+            msg = tx["transaction"]["message"]
+            loaded = tx["meta"].get("loadedAddresses", {})
+            keys = msg["accountKeys"] + loaded.get("writable", []) + loaded.get("readonly", [])
+            pairs = list(zip(msg["instructions"], ptx["transaction"]["message"]["instructions"]))
+            for x, y in zip(tx["meta"].get("innerInstructions", []), ptx["meta"].get("innerInstructions", [])):
+                pairs += list(zip(x["instructions"], y["instructions"]))
+            for ins, pins in pairs:
+                if keys[ins["programIdIndex"]] != TOKEN_2022 or "parsed" not in pins:
+                    continue
+                kind = pins["parsed"]["type"] if isinstance(pins["parsed"], dict) else "unparsed"
+                group = rows.setdefault(kind, [])
+                if len(group) < 200:  # a sample of each kind, not thousands of transfers
+                    group.append({"data": ins["data"], "parsed": pins["parsed"]})
+    print("token2022:", {k: len(v) for k, v in rows.items()})
+    save("token2022", {"slot": slot, "rows": [r for group in rows.values() for r in group]})
+
+
 BTC = "https://mempool.space/api"
 
 
 def capture_bitcoin():
     tip = int(fetch(f"{BTC}/blocks/tip/height")) - 6
     # Recent blocks, the 2023 inscription peak, and the Runes launch block.
-    heights = [(tip, 8), (tip - 1000, 4), (780000, 8), (800000, 4), (840000, 8), (850000, 4)]
+    heights = [(tip, 8 * SCALE), (tip - 1000, 4 * SCALE), (780000, 8 * SCALE), (800000, 4 * SCALE), (840000, 8 * SCALE), (850000, 4 * SCALE)]
     outs, tapscripts, opret = {}, [], []
     for height, pages in heights:
         block = fetch(f"{BTC}/block-height/{height}", raw=True).decode()
@@ -293,7 +385,7 @@ def capture_bitcoin():
                     spk = out["scriptpubkey"]
                     if spk not in outs:
                         outs[spk] = {"script": spk, "type": out["scriptpubkey_type"], "address": out.get("scriptpubkey_address")}
-                    if spk.startswith("6a") and len(opret) < 3000:
+                    if spk.startswith("6a") and len(opret) < 3000 * SCALE:
                         opret.append(spk)
                 for vin in tx["vin"]:
                     w = vin.get("witness") or []
@@ -371,7 +463,10 @@ def capture_cosmos():
     save("cosmos", {"denoms": denoms, "valopers": [v["operator_address"] for v in validators]})
 
 
-CAPTURES = {"evm": capture_evm, "svm": capture_svm, "bitcoin": capture_bitcoin, "aptos": capture_aptos, "sui": capture_sui, "cosmos": capture_cosmos}
+# Older contracts are likelier to bend the standards.
+EVM_HISTORY = {"evm_2018": 6_000_000, "evm_2021": 12_500_000, "evm_2023": 17_000_000}
+CAPTURES = {**{n: (lambda n=n, h=h: capture_chain(n, "https://eth.drpc.org", head=h)) for n, h in EVM_HISTORY.items()},
+            **{n: (lambda n=n, u=u: capture_chain(n, u)) for n, u in EVM_CHAINS.items()}, "evm": capture_evm, "svm": capture_svm, "token2022": capture_token2022, "bitcoin": capture_bitcoin, "aptos": capture_aptos, "sui": capture_sui, "cosmos": capture_cosmos}
 
 if __name__ == "__main__":
     failed = []

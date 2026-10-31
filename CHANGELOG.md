@@ -14,7 +14,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/). Versions fol
 - `docs/LIMITS.md`, `docs/HANDOFF.md`, `CONTRIBUTING.md`.
 - MIT license.
 - `web3_anchor_decode_account_raw(idl, name, data)` for accounts with no Anchor discriminator, such as Metaplex's.
-- `web3_spl_decode` covers every SPL Token instruction, not 4 of them. Token-2022 extensions and Batch are still `NULL`.
+- `web3_spl_decode` covers every SPL Token and Token-2022 instruction, not 4 of them. Extension payloads it does not parse come back as raw `data`.
+- `examples/recipes/`: SQL for each chain, run against the mainnet sample by `make verify`.
 - `tools/reference/live_diff.py` replays a pinned sample of mainnet data in `make verify`.
 
 ### Changed

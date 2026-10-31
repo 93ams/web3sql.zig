@@ -2,15 +2,15 @@
 // generated CREATE is split the way the warehouse would split it, and its body runs as a function of
 // its arguments in a stripped context, with no help from any other function's module.
 // Also prints the cold start, per-row latency and memory a warehouse would see.
-// Usage: node scripts/test_snowflake.mjs [dist/snowflake_udfs.sql] [dist/duckdb_calls.json] [dist/bigquery_udfs.sql]
-import { existsSync, readFileSync } from "node:fs";
+// Usage: node scripts/test_snowflake.mjs [dist/snowflake_udfs.sql] [dist/duckdb_calls.json] [dist/bigquery_udfs.sql] [dist/mutated_calls.json]
+import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import assert from "node:assert/strict";
 
 const sql = readFileSync(process.argv[2] ?? "dist/snowflake_udfs.sql", "utf8");
 const calls = JSON.parse(readFileSync(process.argv[3] ?? "dist/duckdb_calls.json", "utf8"));
 const bigquery = readFileSync(process.argv[4] ?? "dist/bigquery_udfs.sql", "utf8");
-if (existsSync("dist/mutated_calls.json")) calls.push(...JSON.parse(readFileSync("dist/mutated_calls.json", "utf8")));
+if (process.argv[5]) calls.push(...JSON.parse(readFileSync(process.argv[5], "utf8")));
 // Snowflake recommends under 100 KB, and the real limit depends on how well the code compresses.
 const SNOWFLAKE_BODY_MAX = 100_000, BIGQUERY_INLINE_MAX = 32_000;
 const CREATE = /^CREATE OR REPLACE FUNCTION (\w+)\(([^)]*)\) RETURNS (\w+) LANGUAGE JAVASCRIPT RETURNS NULL ON NULL INPUT AS \$\$\n([\s\S]*?)\n\$\$;$/gm;

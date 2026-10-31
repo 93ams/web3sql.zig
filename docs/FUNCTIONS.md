@@ -80,7 +80,7 @@ Types are DuckDB's. Functions marked *DuckDB only* parse JSON, and are left out 
 | `web3_cetus_tick_from_sqrt_price(VARCHAR)` | BIGINT | Cetus tick of a Q64.64 sqrt price |
 | `web3_x64_sqrt_price_to_price(VARCHAR, BIGINT, BIGINT, BIGINT)` | VARCHAR | Price from a Q64.64 sqrt price (sqrt, decimalsA, decimalsB, scale) |
 | `web3_erc_decode(BLOB, BLOB)` | VARCHAR | ERC-20/721/1155 Transfer or Approval as JSON (concatenated topics, data) |
-| `web3_spl_decode(BLOB)` | VARCHAR | SPL Token instruction as JSON |
+| `web3_spl_decode(BLOB)` | VARCHAR | SPL Token or Token-2022 instruction as JSON |
 | `web3_wad_mul(VARCHAR, VARCHAR)` | VARCHAR | Aave wadMul, half up |
 | `web3_wad_div(VARCHAR, VARCHAR)` | VARCHAR | Aave wadDiv, half up |
 | `web3_ray_mul(VARCHAR, VARCHAR)` | VARCHAR | Aave rayMul, half up |

@@ -17,3 +17,4 @@ get idls/meteora_dlmm.json $raw/MeteoraAg/dlmm-sdk/main/ts-client/src/dlmm/idl/i
 get idls/pump.json $raw/pump-fun/pump-public-docs/main/idl/pump.json
 get idls/squads.json $raw/Squads-Protocol/v4/main/sdk/multisig/idl/squads_multisig_program.json
 get idls/token_metadata.json $raw/metaplex-foundation/mpl-token-metadata/main/idls/token_metadata.json
+get idls/whirlpool.json https://unpkg.com/@orca-so/whirlpools-sdk@0.22.0/dist/artifacts/whirlpool.json

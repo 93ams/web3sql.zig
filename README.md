@@ -53,6 +53,8 @@ DuckDB 1.5 and 2.0 are tested. Extensions built here are unsigned, so start Duck
 
 Keep the file name starting with `web3`, because DuckDB derives the entry point from it. `release/web3.linux_amd64.duckdb_extension` loads, and `linux_amd64.duckdb_extension` does not.
 
+[examples/recipes/](examples/recipes/) has queries for each chain, each tested against real mainnet data.
+
 ## Deploying to warehouses
 
 `zig build wasm` writes these files to `dist/`:

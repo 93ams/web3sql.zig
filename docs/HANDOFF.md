@@ -20,11 +20,11 @@ sh scripts/release.sh     # builds release/ with SHA256SUMS
 | Bitcoin envelopes, runestones | 200,000 generated and mutated scripts, no disagreement with a Python port of `ord` | `tools/reference/utxo_diff.py` |
 | Tick math | Every tick matches Uniswap, Orca and Raydium source, forward and inverse | `tools/reference/math_diff.py` |
 | Lending math | 200,000 cases each against constants parsed from Aave and Compound source | `tools/reference/math_diff.py` |
-| Anchor IDLs | Every instruction and event in 7 public IDLs resolves against zero-filled data, and instruction discriminators match | `tools/reference/idl_corpus.py` |
-| Mainnet sample | Pinned real data from 6 chains, compared with `eth_abi`, on-chain contract views and each chain's own node. See the table below | `tools/reference/live_diff.py`, part of `make verify` |
+| Anchor IDLs | Every instruction and event in 8 public IDLs resolves against zero-filled data, and instruction discriminators match | `tools/reference/idl_corpus.py` |
+| Mainnet sample | Pinned real data from 11 chains and blocks back to 2018, compared with `eth_abi`, on-chain contract views and each chain's own node. See the table below | `tools/reference/live_diff.py`, part of `make verify` |
 | Native and WASM agree | 99,626 mutated calls, 46% of them `NULL`, against the bundle and each per-function module. `make verify` runs 3 mutants per call; this figure used 25 | `tools/reference/wasm_diff.py` |
 | Warehouse JavaScript | Every Snowflake body and inline BigQuery body runs alone in a stripped V8 context and matches DuckDB | `scripts/test_wasm.mjs`, `scripts/test_snowflake.mjs` |
-| Stability | One hour per fuzz lane, about 1.3 billion runs, no crash. Decoders changed since then got 30 more minutes on the final tree: 237 million runs on SVM, 412 million on protocols, clean. The 30-minute soak with no memory growth predates the last changes | `.github/workflows/nightly-fuzz.yml`, `make soak` |
+| Stability | One hour per fuzz lane, about 1.3 billion runs, no crash. Decoders changed since then got 30 more minutes each, clean: 237 million runs on SVM, then 343 million on protocols with Token-2022 on the final tree. The 30-minute soak on the Token-2022 build ran 448 scans with RSS flat at about 176 to 194 MB, two samples near 208 MB, and one 274 MB sample as the last scans ended | `.github/workflows/nightly-fuzz.yml`, `make soak` |
 | Hosts | Full suite on the final `linux_amd64` (Debian bullseye), `linux_arm64` (emulated) and `windows_amd64` release artifacts, and on DuckDB 1.5.6 and 2.0.0. Unit tests on musl, and Alpine's loader resolves both musl artifacts | `scripts/test_duckdb.py` |
 | CI readiness | `actionlint` clean, every pinned action SHA exists upstream, and the Linux jobs pass from a clean copy of what git tracks | `make verify` |
 
@@ -32,21 +32,23 @@ Mainnet sample, captured by `tools/reference/live_capture.py` into `tools/refere
 
 | Data | Compared with | Result |
 |---|---|---|
-| 6,288 Ethereum logs, 1,172 calls | `eth_abi` | All agree. 149 logs are ERC-721 `Transfer`, correctly `TopicCount` for the ERC-20 signature |
+| 10,817 logs and 2,682 calls from Ethereum, Arbitrum, Base, Optimism, Polygon and BSC, plus Ethereum in 2018, 2021 and 2023. Includes ERC-1155, ERC-4337 `handleOps`, Safe and `aggregate3` | `eth_abi` | All agree. 261 logs are `TopicCount`: same event hash, different `indexed` fields, such as ERC-721 against the ERC-20 signature |
 | 14 contract creations | Addresses in receipts | All agree |
 | Aave v3 income and debt, 6 reserves | `getReserveNormalizedIncome` and `getReserveNormalizedVariableDebt` at the same block | All 12 exact |
 | Compound cUSDC | `exchangeRateStored` | Exact |
 | Uniswap, Orca, Raydium and Cetus ticks | Each pool's own stored tick and sqrt price | All agree, or sit exactly on a boundary while moving down, where the pool stores `tick - 1` |
-| 1,844 comparisons on SPL instructions | The Solana node's `jsonParsed` | All agree |
+| 1,844 comparisons on SPL instructions, 1,539 on Token-2022 including transfer fees, pointers and token metadata | The Solana node's `jsonParsed` | All agree |
 | Metaplex `Metadata` accounts | The decoded mint re-derives the account's address | All agree |
 | 3,868 Bitcoin script checks | mempool.space type and address | All agree. One `anchor` output is `witness_unknown` here |
 | 202 OP_RETURN, 162 tapscripts | Python port of `ord` | All agree |
 | Aptos resources, Sui coins | The node's own JSON for the same object | All agree |
 | 120 IBC denoms | Hashes computed by an Osmosis node | All agree |
 
-Anchor rows from 6 programs decode, with no independent answer to check values against. Nine pump `buy` rows stay `NULL` because the chain's clients send fewer arguments than the IDL declares.
+Anchor rows from 7 programs decode, with no independent answer to check values against. Nine pump `buy` rows stay `NULL` because the chain's clients send fewer arguments than the IDL declares.
 
-This found four real gaps that generated data never showed: 23 of 27 SPL instructions were unsupported, `emit_cpi` events did not decode, trailing bytes made stale IDLs `NULL`, and Metaplex accounts had no route at all. It is thousands of rows, not millions, so H6 stays necessary.
+This found four real gaps that generated data never showed: 23 of 27 SPL instructions were unsupported, `emit_cpi` events did not decode, trailing bytes made stale IDLs `NULL`, and Metaplex accounts had no route at all. A wider run kept out of the repository compared 67,336 logs, 21,419 calls, 23,328 Bitcoin script checks, 1,061 runestones and 580 inscriptions with no mismatch: `LIVE_SCALE=15 LIVE_DIR=<dir> python tools/reference/live_capture.py`, then `LIVE_DIR=<dir>` on `live_diff.py`. That is still not millions, and those rows passed without showing a new bug, so H6 stays necessary.
+
+Every query in `examples/recipes/` runs against this sample in `make verify` and CI.
 
 ## H1: GitHub
 
@@ -125,7 +127,7 @@ WHERE web3_evm_decode_log(sig, topics, data) IS NULL GROUP BY why ORDER BY 2 DES
 | Chain | Compare with | Look for |
 |---|---|---|
 | EVM | `eth_abi`, or a decoded dataset such as Dune | Proxy events with wrong signatures, non-standard padding, ERC-721 logs that look like ERC-20 |
-| Solana | Program-specific decoders, Anchor's TS client | IDL versions against program versions, truncated log lines, real Raydium and Orca swaps, generic or `coption` IDLs, Token-2022 extensions |
+| Solana | Program-specific decoders, Anchor's TS client | IDL versions against program versions, truncated log lines, real Raydium and Orca swaps, generic or `coption` IDLs, Token-2022 extension payloads returned raw |
 | Bitcoin | A real `ord` index | Inscriptions and runestones at scale, cenotaphs |
 | Sui, Aptos | SDK decoders on real transactions | Type tags, enums |
 | Cosmos | `cosmjs`, chain explorers | IBC traces |

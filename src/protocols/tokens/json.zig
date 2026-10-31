@@ -25,6 +25,27 @@ pub const Out = struct {
         try self.raw("\"");
     }
 
+    /// Writes valid UTF-8 as a quoted JSON string.
+    pub fn string(self: *Out, value: []const u8) JsonError!void {
+        try self.raw("\"");
+        for (value) |c| {
+            switch (c) {
+                '"' => try self.raw("\\\""),
+                '\\' => try self.raw("\\\\"),
+                '\n' => try self.raw("\\n"),
+                '\r' => try self.raw("\\r"),
+                '\t' => try self.raw("\\t"),
+                0...8, 11, 12, 14...0x1f => {
+                    const nibbles = "0123456789abcdef";
+                    try self.raw("\\u00");
+                    try self.raw(&[_]u8{ nibbles[c >> 4], nibbles[c & 15] });
+                },
+                else => try self.raw(&[_]u8{c}),
+            }
+        }
+        try self.raw("\"");
+    }
+
     /// Writes a number up to 2^53, a quoted decimal string beyond it.
     pub fn int(self: *Out, value: u256) JsonError!void {
         var buf: [math.MAX_DECIMAL_LEN]u8 = undefined;
@@ -39,6 +60,13 @@ pub const Out = struct {
         return self.dest[0..self.len];
     }
 };
+
+test "REQ-PROT-02 json writer escapes strings" {
+    var buf: [64]u8 = undefined;
+    var out: Out = .{ .dest = &buf };
+    try out.string("a\"\\\n\x01\xc3\xa9");
+    try std.testing.expectEqualStrings("\"a\\\"\\\\\\n\\u0001\xc3\xa9\"", out.written());
+}
 
 test "REQ-PROT-02 json writer switches to strings above 2^53" {
     var buf: [64]u8 = undefined;

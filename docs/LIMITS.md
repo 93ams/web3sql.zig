@@ -21,7 +21,8 @@ A `NULL` input gives `NULL`, and its twin gives `NULL` too, because nothing fail
 | `UnknownDiscriminator` | An Anchor row from an item the IDL does not list. For Metaplex and other accounts with no Anchor discriminator, use `web3_anchor_decode_account_raw`. For `emit_cpi` events in instruction data, use `web3_anchor_decode_event` |
 | `TrailingBytes` | `web3_borsh_decode` or `web3_bcs_decode` data longer than the schema, usually a wrong schema. `web3_anchor_decode_*` ignores trailing bytes, as Anchor does, so a program that added fields still decodes |
 | `UnexpectedEndOfBuffer` | Data shorter than the schema. For Anchor, often a stale IDL: pump's IDL declares `buy` arguments that many mainnet clients omit |
-| `UnknownInstruction` | A Token-2022 extension or Batch instruction, which `web3_spl_decode` does not cover |
+| `UnknownInstruction` | `web3_spl_decode` was given a tag no SPL Token or Token-2022 program defines, usually another program's data |
+| `InvalidInstruction` | `web3_spl_decode` data with a known tag but an impossible value, such as a bad option flag or text that is not UTF-8 |
 | `UnknownAccount` | `web3_anchor_decode_account_raw` was given a name the IDL does not list |
 | `ZeroSizedElement` | A Borsh vector or array of a type that occupies no bytes |
 | `ResultOutOfRange`, `ArgumentOutOfRange` | A value does not fit the SQL integer type, or an argument does not fit the function's range |
@@ -91,6 +92,6 @@ Function shapes:
 | `web3_btc_runestone` | `{"fields":[[tag,value],...],"body":[...]}` |
 | `web3_btc_inscription` | `{"content_type":"text/plain","body":"0x..."}`, or JSON `null` for no inscription. `content_type` is `null` if absent or not plain ASCII |
 | `web3_erc_decode` | `{"event":"erc20_transfer","from":"0x..","to":"0x..","value":"..."}` |
-| `web3_spl_decode` | `{"type":"transfer_checked",...}` with the fields in the instruction data, in snake case. Public keys are Base58 and an empty `COption` is `null` |
+| `web3_spl_decode` | `{"type":"transfer_checked",...}` with the fields in the instruction data, in snake case. Public keys are Base58 and an empty `COption` is `null`. Token-2022 transfer fees, metadata and group pointers, and token metadata are decoded. Other extensions, such as confidential transfers and transfer hooks, give `{"type":..,"instruction":n,"data":"0x.."}`, and `batch` gives `data` |
 
 From 1.0, changing a name or shape takes a major release, see [CONTRIBUTING.md](../CONTRIBUTING.md). Before 1.0 they may change, and `CHANGELOG.md` will say so.

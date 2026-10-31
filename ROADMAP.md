@@ -14,7 +14,6 @@ None of these block local work.
 
 | # | Question | Affects |
 |---|---|---|
-| D2 | Where does the repo live? CI, nightly fuzz and releases have never run. | H1 |
 | D3 | Who provides a Snowflake account and a GCP project with a bucket, and with what cost cap? | H4, H5 |
 | D4 | Are Spark/Databricks and Polars in scope? The PRD names them and no target exists. DuckDB-WASM is named too, and is untested. | `prd.md` |
 | D5 | Is a GCS bucket acceptable for the 5 BigQuery functions over the 32 KB inline limit? The other 77 need none. | H4 |
@@ -64,9 +63,9 @@ Proven on this machine. All done. Items that cannot be done here say so and move
 
 ### L2: Long runs
 
-- [x] L2.1 One hour per lane under ReleaseSafe, mirroring `nightly-fuzz.yml`: about 1.3 billion runs, no crash or hang. The decoders changed since then got 30 minutes each on the final tree, clean: 237 million runs on SVM, 412 million on protocols. The others are unchanged.
+- [x] L2.1 One hour per lane under ReleaseSafe, mirroring `nightly-fuzz.yml`: about 1.3 billion runs, no crash or hang. The decoders changed since then got 30 minutes each, clean: 237 million runs on SVM, then 343 million on protocols with Token-2022 on the final tree. The others are unchanged.
 - [x] L2.2 Differential: `tools/reference/wasm_diff.py` mutates every recorded call, and native, the WASM bundle and each per-function module must agree: 99,626 mutated calls across 82 functions, 46% of them `NULL`.
-- [x] L2.3 Soak: 30 minutes of multi-threaded scans, 328 in all. RSS peaked at 208 MB after warm-up and 213 MB in the second half, so no leak.
+- [x] L2.3 Soak: 30 minutes of multi-threaded scans, 448 in all. RSS stayed at about 176 to 194 MB with no upward trend, apart from two samples near 208 MB and one of 274 MB as the last scans ended.
 
 ### L3: Generated data against reference implementations
 
@@ -76,10 +75,10 @@ Stands in for real data and cannot replace it: generators produce what their aut
 - [x] L3.2 **Bitcoin:** 200,000 scripts with no disagreement against a Python port of `ord`. The real `ord` moved to H6.
 - [x] L3.3 **CLMM:** every tick against Uniswap, Orca and Raydium source, forward and inverse. Cetus is not verified to the last digit.
 - [x] L3.4 **Lending:** 200,000 cases each against constants and formulas from Aave and Compound source. Separate functions cover Aave's v3.4+ and legacy formulas.
-- [x] L3.5 **Solana:** every item in 7 public IDLs resolves on zero-filled data, after adding `hashMap`, sets and Shank discriminants. Real Metaplex accounts carry no Anchor discriminator, see `docs/LIMITS.md`. No IDL surveyed uses generics, so those stay unsupported. Generated Borsh against a spec encoder.
+- [x] L3.5 **Solana:** every item in 8 public IDLs resolves on zero-filled data, after adding `hashMap`, sets and Shank discriminants. Real Metaplex accounts carry no Anchor discriminator, see `docs/LIMITS.md`. No IDL surveyed uses generics, so those stay unsupported. Generated Borsh against a spec encoder.
 - [x] L3.6 **Move:** generated BCS against a spec encoder. SDK comparison moved to H6.
 - [x] L3.7 **Cosmos:** moved to H6, needs `cosmjs`. Known answers remain in `scripts/test_duckdb.py`.
-- [x] L3.8 **Mainnet sample:** pinned real data from 6 chains, replayed by `make verify` against `eth_abi`, contract views and node output. Exact on Aave, Compound and every tick, including Cetus. Found four real gaps, now fixed: SPL coverage, `emit_cpi` events, trailing bytes and Metaplex accounts. See `docs/HANDOFF.md`.
+- [x] L3.8 **Mainnet sample:** pinned real data from 11 chains and blocks back to 2018, replayed by `make verify` against `eth_abi`, contract views and node output. Exact on Aave, Compound and every tick, including Cetus. Found four real gaps, now fixed: SPL coverage, `emit_cpi` events, trailing bytes and Metaplex accounts. Token-2022 was added against it, and a wider run of 67,336 logs found no more. See `docs/HANDOFF.md`.
 
 ### L4: Hardening
 
@@ -110,7 +109,7 @@ Stands in for real data and cannot replace it: generators produce what their aut
 - [x] L7.1 JSON outputs specified in `docs/LIMITS.md`, each checked against the build. API candidates are below.
 - [x] L7.2 `web3_version()`.
 - [x] L7.3 Stability policy, supported versions, `CHANGELOG.md`, `CONTRIBUTING.md`.
-- [x] L7.4 Limits page and `NULL` troubleshooting. Examples per function remain the catalogue's docs and `scripts/test_duckdb.py`.
+- [x] L7.4 Limits page and `NULL` troubleshooting. `examples/recipes/` has a tested query per chain.
 - [x] L7.5 `examples/dbt-duckdb`: moved to H3's skipped list, needs `dbt-duckdb`.
 - [x] L7.6 10M synthetic Parquet rows: 30x Python per thread, 200x on 20 threads, see `docs/PERF.md`. A regression check waits for H9, since this host varies too much.
 - [x] L7.7 `make verify` runs everything in one command, in about 7 minutes once reference sources are cached.
@@ -148,4 +147,4 @@ Needs people, accounts or hardware this project does not have. [`docs/HANDOFF.md
 - **Warehouse rejection:** Snowflake's sandbox may not expose `WebAssembly`, which no local test can show. H5 starts with a one-line probe, and names the next design to try.
 - **Community extensions:** if their CI cannot build Zig, signed distribution needs another route.
 - **Zig 0.17 churn:** stay pinned in CI and `.zigversion`, and upgrade deliberately.
-- **Small samples flatter us:** generated data shares its authors' assumptions, and the mainnet sample is thousands of rows from a handful of blocks. It found four gaps, so expect H6 to find more.
+- **Small samples flatter us:** generated data shares its authors' assumptions, and the mainnet sample is thousands of rows from a few hundred blocks. It found four gaps, so expect H6 to find more.

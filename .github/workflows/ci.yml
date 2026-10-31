@@ -65,6 +65,7 @@ jobs:
           node-version: lts/*
       - run: python scripts/test_duckdb.py
       - run: python tools/reference/live_diff.py
+      - run: python scripts/test_recipes.py
       - run: zig build wasm
       - run: node scripts/test_wasm.mjs
       - run: node scripts/test_snowflake.mjs

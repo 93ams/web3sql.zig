@@ -6,7 +6,7 @@ for Aave, Compound and Uniswap, each chain's own node for parsed SPL instruction
 types, IBC hashes, BCS resources and Move objects, solders for PDAs, and ord_port.py for envelopes.
 Items with no independent answer report a decode rate, and every NULL reason is printed.
 
-Usage: live_diff.py [extension]. Exits non-zero on any mismatch.
+Set LIVE_DIR to replay a bulk capture instead. Usage: live_diff.py [extension]. Exits non-zero on any mismatch.
 """
 import base64
 import glob
@@ -68,8 +68,14 @@ class Tally:
             print("   ", *[str(x)[:300] for x in b], sep="\n      ")
 
 
+LIVE = os.environ.get("LIVE_DIR", os.path.join(HERE, "live"))
+
+
 def load(name):
-    with gzip.open(os.path.join(HERE, "live", f"{name}.json.gz")) as f:
+    path = os.path.join(LIVE, f"{name}.json.gz")
+    if not os.path.exists(path):
+        return {}
+    with gzip.open(path) as f:
         return json.load(f)
 
 
@@ -100,7 +106,8 @@ def parse_params(sig):
             end = p.rindex(")")
             sub = parse_params(p[: end + 1])
             words = p[end + 1 :].split()
-            out.append(("(" + ",".join(s[0] for s in sub) + ")", words[-1] if words else "", False, sub))
+            array = words.pop(0) if words and words[0].startswith("[") else ""
+            out.append(("(" + ",".join(s[0] for s in sub) + ")" + array, words[-1] if words else "", False, sub))
         else:
             w = p.split()
             out.append((w[0], w[-1] if len(w) > 1 else "", "indexed" in w, None))
@@ -138,13 +145,19 @@ def signed(v, bits):
     return v - (1 << bits) if v >> (bits - 1) else v
 
 
+def evm_rows():
+    docs = [load(os.path.basename(p)[: -len(".json.gz")]) for p in sorted(glob.glob(os.path.join(LIVE, "evm*.json.gz")))]
+    return [log for d in docs for log in d["logs"]], [c for d in docs for c in d["calls"]]
+
+
 def evm():
     d = load("evm")
+    all_logs, all_calls = evm_rows()
     t = Tally("evm logs vs eth_abi")
     ticks = Tally("uniswap Swap tick vs sqrtPriceX96")
     erc = Tally("web3_erc_decode vs eth_abi")
     addr = Tally("checksum vs eth_utils")
-    for log in d["logs"]:
+    for log in all_logs:
         params = parse_params(log["sig"])
         topics, data = [by(x) for x in log["topics"]], by(log["data"])
         indexed = [p for p in params if p[2]]
@@ -155,10 +168,13 @@ def evm():
             if len(topics) != 1 + len(indexed):
                 raise ValueError("topic count")
             vals = {p[1]: render(p[0], None, abi_decode([p[0]], tv)[0]) for p, tv in zip(indexed, topics[1:])}
-            vals.update({p[1]: render(p[0], None, v) for p, v in zip(plain, abi_decode([p[0] for p in plain], data))})
+            vals.update({p[1]: render(p[0], p[3], v) for p, v in zip(plain, abi_decode([p[0] for p in plain], data))})
         except Exception:
             t.eq(got, None, f"eth_abi rejects {log}")
             t.note(f"NULL: {why('evm_decode_log', log['sig'], joined, data)}")
+            continue
+        if got is None:
+            t.eq(why("evm_decode_log", log["sig"], joined, data), "eth_abi decoded this", log)
             continue
         if not t.eq(normal(json.loads(got)) if got else None, normal(vals), log["sig"]):
             continue
@@ -170,7 +186,7 @@ def evm():
                 ticks.note("on a tick boundary")
             else:
                 ticks.eq(mine, tick, log["data"])
-        if log["sig"].startswith(("event Transfer", "event Approval")):
+        if log["sig"].startswith(("event Transfer(", "event Approval(")):
             got = q("erc_decode", joined, data)
             kind = "erc20_" + log["sig"].split()[1].split("(")[0].lower()
             g = json.loads(got)
@@ -186,7 +202,7 @@ def evm():
         x.done()
 
     t = Tally("evm calldata vs eth_abi")
-    for c in d["calls"]:
+    for c in all_calls:
         params = parse_params(c["sig"])
         data = by(c["input"])
         got = q("evm_decode_calldata", c["sig"], data)
@@ -203,6 +219,8 @@ def evm():
             t.eq(normal(json.loads(got)), normal(want), c["sig"])
     t.done()
 
+    if not d:
+        return
     t = Tally("CREATE address vs receipts")
     for c in d["creates"]:
         t.eq("0x" + q("evm_create_address", by(c["from"]), c["nonce"]).hex(), c["address"], c)
@@ -229,6 +247,29 @@ def evm():
     t.done()
 
 
+TOKEN_NAMES = {"close_authority": "newAuthority", "fee": "feeAmount"}
+
+
+def compare_token(t, row, got):
+    """Every field we output that the node also reports must match it."""
+    p = row["parsed"]
+    if got is None:
+        t.note(f"NULL {p['type']}: {why('spl_decode', base58.b58decode(row['data']))}")
+        return
+    g = json.loads(got)
+    info = p["info"]
+    t.eq(g["type"].replace("_", ""), p["type"].lower(), row)
+    for key, value in g.items():
+        if key in ("type", "authority_type", "extension_types", "m"):
+            continue
+        name = TOKEN_NAMES.get(key, key.split("_")[0] + "".join(w.title() for w in key.split("_")[1:]))
+        want = info.get(name, info.get("tokenAmount") if key in ("amount", "decimals") else None)
+        if isinstance(want, dict):
+            want = want.get("decimals" if key == "decimals" else "amount")
+        if name in info or isinstance(info.get("tokenAmount"), dict) and key in ("amount", "decimals"):
+            t.eq(str(value), str(want), (key, row))
+
+
 WHIRLPOOL = "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc"
 METAPLEX = "metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s"
 EMIT_CPI = bytes.fromhex("e445a52e51cb9a1d")
@@ -240,29 +281,24 @@ PROGRAMS = {
     "SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf": "squads",
     "4MangoMjqJ2firMokCjjGgoK8d4MXcrgL7XJaL3w6fVg": "mango",
     "metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s": "token_metadata",
+    "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc": "whirlpool",
 }
 
 
 def svm():
     d = load("svm")
+    if not d:
+        return
     t = Tally("SPL instructions vs node jsonParsed")
     for s in d["spl"]:
         data = base58.b58decode(s["data"])
         got = q("spl_decode", data)
-        p = s["parsed"]
-        if got is None:
-            t.note(f"NULL {p['type']}: {why('spl_decode', data)}")
-            continue
-        g = json.loads(got)
-        info = p["info"]
-        t.eq(g["type"].replace("_", ""), p["type"].lower(), s)
-        amount = info.get("amount", info.get("tokenAmount", {}).get("amount"))
-        if "amount" in g and amount is not None:
-            t.eq(str(g["amount"]), str(amount), s)
-        if "tokenAmount" in info:
-            t.eq(g.get("decimals"), info["tokenAmount"]["decimals"], s)
-        if "owner" in g:
-            t.eq(g["owner"], info["owner"], s)
+        compare_token(t, s, got)
+    t.done()
+
+    t = Tally("Token-2022 instructions vs node jsonParsed")
+    for s in load("token2022")["rows"]:
+        compare_token(t, s, q("spl_decode", base58.b58decode(s["data"])))
     t.done()
 
     t = Tally("metadata PDA vs solders")
@@ -310,6 +346,8 @@ def svm():
                 ticks.eq(q("raydium_tick_from_sqrt_price", str(sqrt)), tick, a["key"])
             continue
         if a["owner"] == WHIRLPOOL:
+            got = q("anchor_decode_account", idls["whirlpool"], data)
+            t.note("decoded whirlpool" if got else f"NULL whirlpool: {why('anchor_decode_account', idls['whirlpool'], data)}")
             if len(data) == 653:
                 sqrt = int.from_bytes(data[65:81], "little")
                 tick = int.from_bytes(data[81:85], "little", signed=True)
@@ -318,6 +356,9 @@ def svm():
                     orca.note("on a tick boundary, exact")
                 else:
                     orca.eq(mine, tick, a["key"])
+                if got:
+                    w = json.loads(got)["data"]
+                    orca.eq((str(w["sqrt_price"]), w["tick_current_index"]), (str(sqrt), tick), a["key"])
             continue
         if a["owner"] == METAPLEX:
             kind = {4: "Metadata", 6: "MasterEditionV2", 11: "TokenRecord"}.get(data[0])
@@ -362,6 +403,8 @@ def plain(b):
 
 def bitcoin():
     d = load("bitcoin")
+    if not d:
+        return
     t = Tally("bitcoin scripts vs mempool.space")
     for o in d["outputs"]:
         s = by(o["script"])
@@ -424,7 +467,7 @@ def aptos():
             return "0x" + v[2:].rjust(64, "0")
         return v
 
-    for r in load("aptos")["resources"]:
+    for r in load("aptos").get("resources", []):
         got = q("bcs_decode", r["schema"], by(r["bcs"]))
         if got is None:
             t.eq(why("bcs_decode", r["schema"], by(r["bcs"])), "decoded", r["tag"])
@@ -435,6 +478,8 @@ def aptos():
 
 def sui():
     d = load("sui")
+    if not d:
+        return
     t = Tally("Sui coin BCS vs node JSON")
     for c in d["coins"]:
         got = q("bcs_decode", "{id:address,balance:u64}", base64.b64decode(c["bcs"]))
@@ -454,6 +499,8 @@ def sui():
 
 def cosmos():
     d = load("cosmos")
+    if not d:
+        return
     t = Tally("IBC denom vs node hash")
     for x in d["denoms"]:
         t.eq(q("ibc_denom", x["trace"]), "ibc/" + x["hash"], x["trace"])
