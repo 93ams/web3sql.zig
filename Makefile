@@ -1,7 +1,9 @@
-.PHONY: all test verify reference soak release build duckdb wasm docs bench data bq-deploy clean
+.PHONY: all test verify reference soak artifacts build duckdb wasm docs bench data bq-deploy clean install_zig configure release test_release
 
 # Builds on a Windows-mounted filesystem hang unless the cache lives elsewhere.
+ifneq ($(filter /mnt/%,$(CURDIR)),)
 export ZIG_LOCAL_CACHE_DIR ?= $(HOME)/.cache/web3sql-zig/main
+endif
 
 # An interpreter with scripts/requirements-dev.txt installed, for the targets that need one.
 PYTHON ?= python
@@ -43,7 +45,7 @@ reference: duckdb
 soak: duckdb
 	$(PYTHON) tools/reference/soak.py zig-out/bin/web3.duckdb_extension 1800
 
-release:
+artifacts:
 	PYTHON=$(PYTHON) sh scripts/release.sh
 
 duckdb:
@@ -66,4 +68,33 @@ bq-deploy:
 	python scripts/deploy_bq_test_data.py
 
 clean:
-	rm -rf zig-out .zig-cache dist release
+	rm -rf zig-out .zig-cache dist release build configure .zig-toolchain
+
+# DuckDB's community build runs `make configure_ci`, `make release` and `make test_release`,
+# so those names keep the meanings base.Makefile gives them. That CI checks out extension-ci-tools here.
+EXTENSION_NAME = web3
+-include extension-ci-tools/makefiles/c_api_extensions/base.Makefile
+
+ZIG = $(shell which zig 2>/dev/null || echo $(CURDIR)/.zig-toolchain/zig)
+ZIG_TARGET_linux_amd64 = x86_64-linux-gnu
+ZIG_TARGET_linux_arm64 = aarch64-linux-gnu
+ZIG_TARGET_linux_amd64_musl = x86_64-linux-musl
+ZIG_TARGET_linux_arm64_musl = aarch64-linux-musl
+ZIG_TARGET_osx_amd64 = x86_64-macos
+ZIG_TARGET_osx_arm64 = aarch64-macos
+ZIG_TARGET_windows_amd64 = x86_64-windows-gnu
+ZIG_TARGET_windows_arm64 = aarch64-windows-gnu
+ZIG_TARGET = $(ZIG_TARGET_$(DUCKDB_PLATFORM))
+
+install_zig:
+	$(PYTHON_BIN) scripts/install_zig.py
+
+configure: install_zig venv platform
+
+release: check_configure
+	$(ZIG) build duckdb -Doptimize=fast -Dcpu=baseline $(if $(ZIG_TARGET),-Dtarget=$(ZIG_TARGET))
+	mkdir -p build/release/extension/web3
+	cp zig-out/bin/web3.duckdb_extension build/release/web3.duckdb_extension
+	cp zig-out/bin/web3.duckdb_extension build/release/extension/web3/web3.duckdb_extension
+
+test_release: test_extension_release

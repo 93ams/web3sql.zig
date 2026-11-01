@@ -129,13 +129,13 @@ Settled while renames were free, and listed in `CHANGELOG.md`:
 
 Needs people, accounts or hardware this project does not have. [`docs/HANDOFF.md`](docs/HANDOFF.md) has the exact commands and completion test for each.
 
-- [ ] H1 **GitHub:** `ci.yml` is green on all three systems. `nightly-fuzz.yml` still has to finish a run.
-- [ ] H2 **macOS:** Apple Silicon passes in CI. The Intel build and the release artifacts remain.
-- [ ] H3 **Other artifacts:** musl and `windows_arm64` runtime, newest DuckDB pre-release, and the steps skipped locally.
+- [ ] H1 **GitHub:** `ci.yml` and all five `nightly-fuzz.yml` lanes are green. Private vulnerability reporting still has to be turned on.
+- [ ] H2 **macOS:** `ci.yml` now runs both release artifacts, Intel included. Waits on its first green run.
+- [ ] H3 **Other artifacts:** `ci.yml` now covers musl and `windows_arm64`, and the nightly covers the DuckDB pre-release. Waits on their first green runs. The real `ord` comparison remains.
 - [ ] H4 **BigQuery:** deploy, replay, a million-row query with malformed rows.
 - [ ] H5 **Snowflake:** test one `CREATE` first.
 - [ ] H6 **Real data:** millions of real rows per chain against independent decoders, with every `NULL` class explained.
-- [ ] H7 **Signed distribution** through `duckdb/community-extensions`.
+- [ ] H7 **Signed distribution** through `duckdb/community-extensions`. The build contract is in place and `ci.yml` tests it. The pull request remains.
 - [ ] H8 **Independent security review.**
 - [ ] H9 **Dedicated-hardware benchmarks.**
 - [ ] H10 **Outside users** on real pipelines, then 1.0.
@@ -145,6 +145,6 @@ Needs people, accounts or hardware this project does not have. [`docs/HANDOFF.md
 ## 6. Risks
 
 - **Warehouse rejection:** Snowflake's sandbox may not expose `WebAssembly`, which no local test can show. H5 starts with a one-line probe, and names the next design to try.
-- **Community extensions:** if their CI cannot build Zig, signed distribution needs another route.
+- **Community extensions:** Zig is not a toolchain their CI installs. The listed `maxmind` extension builds with Zig 0.17 through its own Makefile, and this repository now follows the same contract, but acceptance is their decision.
 - **Zig 0.17 churn:** stay pinned in CI and `.zigversion`, and upgrade deliberately.
 - **Small samples flatter us:** generated data shares its authors' assumptions, and the mainnet sample is thousands of rows from a few hundred blocks. It found four gaps, so expect H6 to find more.

@@ -70,3 +70,96 @@ jobs:
       - run: zig build wasm
       - run: node scripts/test_wasm.mjs
       - run: node scripts/test_snowflake.mjs
+
+  artifacts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
+        with:
+          version: 0.17.0
+      - run: sh scripts/build_artifacts.sh
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: extensions
+          path: release/*.duckdb_extension
+          if-no-files-found: error
+
+  # Runs the files we ship, cross-built on Linux, on the system each one is for.
+  artifact-test:
+    needs: artifacts
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, platform: linux_amd64 }
+          - { os: ubuntu-24.04-arm, platform: linux_arm64 }
+          - { os: macos-latest, platform: osx_arm64 }
+          - { os: macos-15-intel, platform: osx_amd64 }
+          - { os: windows-latest, platform: windows_amd64 }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.13"
+      - run: pip install -r scripts/requirements-dev.txt
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: extensions
+          path: release
+      - run: python scripts/test_duckdb.py release/web3.${{ matrix.platform }}.duckdb_extension
+
+  # Python wheels do not cover musl, so this uses DuckDB's own musl CLI inside Alpine.
+  artifact-test-musl:
+    needs: artifacts
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, arch: amd64, sha256: 3285e4083a79955b0606ab799ebc1493087307cdc76b4827308b1a4dcdb371c9 }
+          - { os: ubuntu-24.04-arm, arch: arm64, sha256: 59aee3049c335917307f5df1b3722af1335fef99199dc89e8064d1b2838620c7 }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: extensions
+          path: release
+      - run: curl -fsSLo cli.tar.gz https://github.com/duckdb/duckdb/releases/download/v2.0.0/duckdb-cli-linux-${{ matrix.arch }}-musl.tar.gz
+      - run: echo "${{ matrix.sha256 }}  cli.tar.gz" | sha256sum -c -
+      - run: tar xzf cli.tar.gz
+      - name: Load the extension in Alpine
+        run: |
+          cat > check.sql <<'SQL'
+          LOAD 'release/web3.linux_${{ matrix.arch }}_musl.duckdb_extension';
+          SELECT web3_hex_encode(web3_keccak256(''::BLOB));
+          SQL
+          docker run --rm -v "$PWD:/w" -w /w alpine:3.21@sha256:ee16d92f96db08d9d2d07da48555a27f3a69d8f0759021dbc601195ed0d2b5bd \
+            sh -euc 'apk add --no-cache libstdc++ >/dev/null; ./duckdb -unsigned -noheader -list -f check.sql' | tee out.txt
+          grep -q c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470 out.txt
+
+  # The build DuckDB's community repository runs. It also covers Windows on Arm, where the
+  # dependencies of scripts/test_duckdb.py have no wheels.
+  community:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest }
+          - { os: macos-latest }
+          - { os: windows-latest }
+          - { os: windows-11-arm, platform: windows_arm64 }
+    runs-on: ${{ matrix.os }}
+    env:
+      DUCKDB_PLATFORM: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: duckdb/extension-ci-tools
+          ref: e38c2e18085bb960555ed74f1d9695de8e67b108 # v2.0-cyanoptera
+          path: extension-ci-tools
+      - run: choco install make
+        if: runner.os == 'Windows'
+      - run: make configure release test_release
+        shell: bash

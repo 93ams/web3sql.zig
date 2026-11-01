@@ -13,3 +13,7 @@ dist/
 release/
 __pycache__/
 node_modules/
+build/
+configure/
+.zig-toolchain/
+extension-ci-tools/

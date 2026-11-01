@@ -1,0 +1,19 @@
+# name: test/sql/web3.test
+# group: [web3]
+
+require web3
+
+query I
+SELECT web3_version();
+----
+0.1.0
+
+query I
+SELECT web3_hex_encode(web3_keccak256(''::BLOB));
+----
+c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470
+
+query I
+SELECT web3_hex_encode(web3_keccak256('Transfer(address,address,uint256)'::BLOB));
+----
+ddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef

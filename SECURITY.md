@@ -37,4 +37,4 @@ Before 1.0, only the latest release gets fixes. See the tables in `CONTRIBUTING.
 
 ## Reporting
 
-Please report vulnerabilities privately, not in a public issue: through GitHub security advisories once the repository is public. Until then the project has no public users, so raise it with whoever gave you the code. Include the function, the input bytes, and the DuckDB or runtime version.
+Please report vulnerabilities privately, not in a public issue: through [GitHub security advisories](https://github.com/93ams/web3sql.zig/security/advisories/new). Include the function, the input bytes, and the DuckDB or runtime version.

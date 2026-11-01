@@ -27,7 +27,7 @@ sh scripts/release.sh     # builds release/ with SHA256SUMS
 | Warehouse JavaScript | Every Snowflake body and inline BigQuery body runs alone in a stripped V8 context and matches DuckDB | `scripts/test_wasm.mjs`, `scripts/test_snowflake.mjs` |
 | Stability | One hour per fuzz lane, about 1.3 billion runs, no crash. Decoders changed since then got 30 more minutes each, clean: 237 million runs on SVM, then 343 million on protocols with Token-2022 on the final tree. The 30-minute soak on the Token-2022 build ran 448 scans with RSS flat at about 176 to 194 MB, two samples near 208 MB, and one 274 MB sample as the last scans ended | `.github/workflows/nightly-fuzz.yml`, `make soak` |
 | Hosts | Full suite on the final `linux_amd64` (Debian bullseye), `linux_arm64` (emulated) and `windows_amd64` release artifacts, and on DuckDB 1.5.6 and 2.0.0. Unit tests on musl, and Alpine's loader resolves both musl artifacts | `scripts/test_duckdb.py` |
-| CI readiness | `actionlint` clean, every pinned action SHA exists upstream, and the Linux jobs pass from a clean copy of what git tracks | `make verify` |
+| CI readiness | `actionlint` clean, every pinned action SHA exists upstream, and the Linux jobs pass from a clean copy of what git tracks. GitHub ran all 31 `ci.yml` jobs and all five one-hour fuzz lanes green | `make verify` |
 
 Mainnet sample, captured by `tools/reference/live_capture.py` into `tools/reference/live/`:
 
@@ -59,31 +59,27 @@ git push -u origin main
 
 Do not push a tag until you mean to release: `release.yml` publishes a public GitHub release for any `v*` tag. Tag the commit you mean to release, and only after this job is green.
 
-`ci.yml` passes on GitHub on Linux, macOS and Windows. `nightly-fuzz.yml` has been started by hand for the first time.
+`ci.yml` passes on GitHub on Linux, macOS and Windows, and all five `nightly-fuzz.yml` lanes finished an hour each. What is left is the private reporting that `SECURITY.md` promises:
 
-**Done when:** CI is green on all jobs and one nightly run completes. Also set the security advisory contact that `SECURITY.md` promises.
+```sh
+gh api -X PUT repos/93ams/web3sql.zig/private-vulnerability-reporting
+```
+
+**Done when:** `gh api repos/93ams/web3sql.zig/private-vulnerability-reporting` says `enabled: true`.
 
 ## H2: macOS
 
-CI's integration job already builds and runs the suite on `macos-latest` (Apple Silicon) with DuckDB 2.0 and 1.5. What is left is the Intel Mac and the release artifact itself. With a Python that has `duckdb` and `scripts/requirements-dev.txt`:
+`ci.yml`'s `artifact-test` job cross-builds the release files on Linux, then runs `scripts/test_duckdb.py` on each one's own system, including `macos-15-intel`. This also tests C++ exceptions crossing Zig frames, confirmed so far only on Linux and Windows.
 
-```sh
-python scripts/test_duckdb.py release/web3.osx_arm64.duckdb_extension   # or osx_amd64
-```
-
-Keep the file name as released. This also tests C++ exceptions crossing Zig frames, confirmed so far only on Linux and Windows.
-
-**Done when:** it prints `SUCCESS`.
+**Done when:** the `osx_arm64` and `osx_amd64` rows are green. Those are GitHub's machines, so a test on a real Mac remains worthwhile before 1.0.
 
 ## H3: Other artifacts that have never been loaded
 
-These needed something a local run could not fetch. See "Skipped locally" below.
+- `linux_amd64_musl`, `linux_arm64_musl`: `ci.yml`'s `artifact-test-musl` job loads each release file with DuckDB's musl CLI in Alpine and checks one Keccak digest. That shows it loads and runs, not the full suite.
+- `windows_arm64`: `solders` and `pyarrow` have no Windows on Arm wheels, so `scripts/test_duckdb.py` cannot run there. `ci.yml`'s `community` job builds with the release flags on `windows-11-arm` and runs `test/sql/web3.test` instead. The shipped file itself is not the one loaded.
+- The newest DuckDB pre-release: the `duckdb-prerelease` job in `nightly-fuzz.yml` runs `scripts/test_duckdb.py` on it.
 
-- `linux_amd64_musl`, `linux_arm64_musl`: these link and resolve in Alpine, but have never run inside DuckDB, because Alpine has no `duckdb` package. In Alpine with a musl DuckDB CLI, run `LOAD` and then `SELECT web3_version(), web3_hex_encode(web3_keccak256(''::BLOB));`. The digest must be `c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470`.
-- `windows_arm64`: `scripts/test_duckdb.py` on a Windows on Arm machine.
-- The newest DuckDB pre-release: rerun `scripts/test_duckdb.py`.
-
-**Done when:** each loads and passes, or the README marks it unsupported.
+**Done when:** each job is green, or the README marks that platform unsupported.
 
 ## H4: BigQuery
 
@@ -136,13 +132,15 @@ WHERE web3_evm_decode_log(sig, topics, data) IS NULL GROUP BY why ORDER BY 2 DES
 | Cosmos | `cosmjs`, chain explorers | IBC traces |
 | Lending | On-chain `getReserveNormalizedIncome` calls | Which Aave version each market ran, since v3.4 changed the compounded formula |
 
-The pinned sample in the evidence table is a head start, and `tools/reference/live_capture.py` shows how to fetch from each chain. Also worth doing: replace the Python ports with the real thing. `utxo_diff.py` uses a port of `ord`, so a Rust harness over the `ordinals` crate is stronger. `@uniswap/v3-sdk`, `@aave/math-utils`, `@mysten/bcs` and `cosmjs` would likewise replace or add to checks written against sources.
+The pinned sample in the evidence table is a head start, and `tools/reference/live_capture.py` shows how to fetch from each chain. Also worth doing: replace the Python ports with the real thing. `utxo_diff.py` uses a port of `ord`, so a Rust harness over the `ordinals` crate is stronger. `@uniswap/v3-sdk` and `@aave/math-utils` would likewise add to checks written against sources.
 
 **Done when:** match rate is reported per chain, and every `NULL` class is explained or fixed. Each bug found gets a regression test.
 
 ## H7: Signed distribution
 
-Extensions are unsigned, which many deployments forbid. Find out whether `duckdb/community-extensions` CI can build Zig, then submit `.github/duckdb-community/description.yml` with `repo.ref` set. If it cannot, signed distribution needs another route.
+Extensions are unsigned, which many deployments forbid. Community CI installs no Zig, but the listed `maxmind` extension shows the route: it runs `make configure_ci`, `make release` and `make test_release` from the extension's own Makefile. This repository follows that contract, `scripts/install_zig.py` installs a hash-pinned Zig, and `ci.yml`'s `community` job runs the same targets.
+
+Once that job is green, submit `.github/duckdb-community/description.yml` as `extensions/web3/description.yml` with `repo.ref` set. Only the job's targets are tested here: their Linux Docker images and the signing step run only on their side.
 
 ## H8: Security review
 
@@ -155,7 +153,7 @@ zig build bench
 python tools/reference/measure.py release/web3.linux_amd64.duckdb_extension
 ```
 
-The WSL2 host used so far varies by about 25% and exposes no instruction counters, so there is no automated regression check. Add one here. Decide ROADMAP D6 with those numbers.
+The WSL2 host used so far varies by about 25% and exposes no instruction counters, so there is no automated regression check. Add one here.
 
 ## H10: Outside users, then 1.0
 
@@ -168,4 +166,3 @@ Tools that were not installed here, because they run third-party code. Each is a
 | Step | Needs | Command |
 |---|---|---|
 | `ord` reference | Rust crates `ordinals`, `bitcoin` | See H6 |
-| Running musl builds in DuckDB, DuckDB pre-release | DuckDB CLI binaries | See H3 |
